@@ -78,14 +78,22 @@ minSdk 26, target/compile 37.
 ru.palustris.music
 ├─ core/   AppModule (OkHttp + auth interceptor, Retrofit, Json, @AppScope), net/ (MusicApi, apiCall → Russian error text),
 │          model/ (Track…), prefs/ (SessionStore: token; SettingsStore: cache limit, download quality, Wi-Fi only)
-├─ data/   LibraryRepository (likes, optimistic)
+├─ data/   LibraryRepository (likes, optimistic), PlaylistsRepository (server playlists + `version` to reload open ones)
 ├─ media/  PlaybackService (MediaSessionService + ExoPlayer: background, notification, headset keys,
-│          history/skip reporting, server prefetch, endless «Моя волна», skip on error),
-│          PlayerConnection (MediaController → StateFlow<PlayerState> for UI),
+│          history/skip reporting, server prefetch, endless «Моя волна», skip on error,
+│          queue persistence + onPlaybackResumption, EQ in the audio sink),
+│          PlayerConnection (MediaController → StateFlow<PlayerState> for UI), QueueStore (filesDir/queue.json),
+│          SleepTimer (fade over 10 s via player.volume, or pauseAtEndOfMediaItems),
 │          AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
-└─ ui/     MusicRoot (theme from artwork, Nav3 tabs, mini/full player, snackbars), MainViewModel (TrackActions, PlayerControls),
-           auth/ home/ search/ library/ settings/ player/ common/ theme/
+│   eq/    EqMath (bands/formulas = website), EqualizerProcessor (BaseAudioProcessor, PCM16), EqualizerStore (DataStore)
+└─ ui/     MusicRoot (theme from artwork, Nav3, mini/full player, snackbars, Navigator, add-to-playlist sheet),
+           MainViewModel (TrackActions, PlayerControls), auth/ home/ search/ library/ settings/ player/ (FullPlayer,
+           Lyrics, MiniPlayer) catalog/ (artist, album pages) playlists/ equalizer/ common/ theme/
 ```
+
+Navigation keys: Home, Search, Library(tab), Settings, Artist(id?, name), Collection(id), Playlist(id), Equalizer.
+Detail screens use `hiltViewModel(key = ...)` in the activity store (no per-entry ViewModel decorator, so tab state
+survives switching). `LocalNavigator` opens pages from anywhere, including the full player (it collapses first).
 
 Unidirectional data flow: ViewModel exposes `StateFlow`, UI collects with `collectAsStateWithLifecycle()`.
 The UI talks to the player only through `PlayerConnection`. It connects in MainActivity.onStart and releases
@@ -116,13 +124,25 @@ Verified on the emulator:
 - «Очистить кэш» keeps downloads;
 - release build (R8): login, playback and download.
 
+Also verified (0.2.0):
+- queue and position restored after force-stop;
+- headset Play with the app stopped resumes from the saved position (MediaButtonReceiver + onPlaybackResumption);
+- EQ preset and dragging while playing (debug and release);
+- synced lyrics follow playback;
+- artist page → YouTube playlist → «Сохранить» creates a server playlist;
+- track menu → «В плейлист» → new playlist;
+- history tab;
+- sleep timer «когда закончится трек» pauses exactly at the end.
+
+Unit tests: PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
+wrap on overload), LRC parser.
+
 ### Known gaps / next steps
 
-- Queue and position are not restored after process death (needs Media3 `onPlaybackResumption` plus a persisted queue).
-- Equalizer.
-- Lyrics.
-- Artist and album pages.
-- Playlists.
+- Playlist reorder is up/down from the track menu, not drag and drop.
+- Sharing playlists (`/api/playlists/{id}/share`).
+- Crossfade and loudness normalization.
+- Offline copies of likes and playlists (needs Room).
 - Android Auto (MediaLibraryService).
 - Glance widget.
 - Baseline profile.

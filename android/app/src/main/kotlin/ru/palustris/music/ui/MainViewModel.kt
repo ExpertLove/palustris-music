@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -20,7 +22,12 @@ import ru.palustris.music.core.net.apiCall
 import ru.palustris.music.core.prefs.Session
 import ru.palustris.music.core.prefs.SessionStore
 import ru.palustris.music.core.prefs.SettingsStore
+import ru.palustris.music.core.model.PlaylistRow
 import ru.palustris.music.data.LibraryRepository
+import ru.palustris.music.data.PlaylistsRepository
+import ru.palustris.music.media.SleepState
+import ru.palustris.music.media.SleepTimer
+import ru.palustris.music.media.eq.EqualizerStore
 import ru.palustris.music.media.AudioStorage
 import ru.palustris.music.media.PlayerConnection
 import ru.palustris.music.media.PlayerState
@@ -39,7 +46,21 @@ constructor(
   private val storage: AudioStorage,
   private val settings: SettingsStore,
   private val api: MusicApi,
+  private val playlistsRepo: PlaylistsRepository,
+  private val sleepTimer: SleepTimer,
+  equalizer: EqualizerStore,
 ) : ViewModel(), TrackActions, PlayerControls {
+
+  val sleep: StateFlow<SleepState> = sleepTimer.state
+
+  val eqEnabled: StateFlow<Boolean> =
+    equalizer.ui.map { it.enabled }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+  val playlists: StateFlow<List<PlaylistRow>?> = playlistsRepo.list
+
+  /** Трек, для которого открыт выбор плейлиста. */
+  private val _pickPlaylistFor = MutableStateFlow<Track?>(null)
+  val pickPlaylistFor: StateFlow<Track?> = _pickPlaylistFor.asStateFlow()
 
   val session: StateFlow<Session> = sessionStore.session
 
@@ -64,6 +85,7 @@ constructor(
     viewModelScope.launch {
       session.filterIsInstance<Session.LoggedIn>().map { it.token }.distinctUntilChanged().collect {
         library.refresh()
+        playlistsRepo.refresh()
       }
     }
     viewModelScope.launch {
@@ -114,11 +136,44 @@ constructor(
 
   override fun cycleRepeat() = player.cycleRepeat()
 
+  /** Таймер сна: минуты, -1 — до конца трека, 0 — выключить. */
+  fun setSleep(minutes: Int) =
+    when {
+      minutes > 0 -> sleepTimer.start(minutes)
+      minutes < 0 -> sleepTimer.stopAtEndOfTrack()
+      else -> sleepTimer.cancel()
+    }
+
+  fun askPlaylistFor(track: Track?) {
+    _pickPlaylistFor.value = track
+    if (track != null && playlistsRepo.list.value == null) viewModelScope.launch { playlistsRepo.refresh() }
+  }
+
+  fun addToPlaylist(p: PlaylistRow, track: Track) {
+    _pickPlaylistFor.value = null
+    viewModelScope.launch {
+      playlistsRepo.add(p.id, track).fold({ _messages.send("Добавлен в «${p.name}»") }, { _messages.send(it.message ?: "Не получилось") })
+    }
+  }
+
+  fun createPlaylistWith(name: String, track: Track) {
+    _pickPlaylistFor.value = null
+    viewModelScope.launch {
+      playlistsRepo.create(name, listOf(track)).fold({ _messages.send("Плейлист «${name.trim()}» создан") }, { _messages.send(it.message ?: "Не получилось") })
+    }
+  }
+
+  fun message(text: String) {
+    _messages.trySend(text)
+  }
+
   fun logout() {
     viewModelScope.launch {
       apiCall { api.logout() }
       player.stop()
       library.clear()
+      playlistsRepo.clear()
+      sleepTimer.cancel()
       sessionStore.clear()
     }
   }

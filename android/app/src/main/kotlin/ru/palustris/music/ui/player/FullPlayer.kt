@@ -11,7 +11,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +37,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FileDownload
@@ -49,6 +57,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -60,6 +70,9 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -74,11 +87,18 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.os.SystemClock
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
+import kotlinx.coroutines.delay
+import ru.palustris.music.media.SleepState
+import ru.palustris.music.ui.common.LocalNavigator
 import coil3.compose.AsyncImage
 import ru.palustris.music.media.PlayerState
 import ru.palustris.music.media.Progress
@@ -109,11 +129,27 @@ interface PlayerControls {
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerControls, onCollapse: () -> Unit) {
+fun FullPlayer(
+  state: PlayerState,
+  progress: State<Progress>,
+  controls: PlayerControls,
+  onCollapse: () -> Unit,
+  sleep: SleepState,
+  onSleep: (Int) -> Unit,
+  eqEnabled: Boolean,
+  onOpenEqualizer: () -> Unit,
+  onOpenArtist: () -> Unit,
+) {
   val track = state.track ?: return
   val marks = LocalTrackMarks.current
   val actions = LocalTrackActions.current
+  val nav = LocalNavigator.current
   var showQueue by remember { mutableStateOf(false) }
+  var showSleep by remember { mutableStateOf(false) }
+  var showLyrics by rememberSaveable { mutableStateOf(false) }
+  val lyricsVm: LyricsViewModel = hiltViewModel()
+  val lyrics by lyricsVm.state.collectAsStateWithLifecycle()
+  LaunchedEffect(track.id, showLyrics) { if (showLyrics) lyricsVm.load(track) }
   val liked = track.id in marks.liked
   val dl = marks.downloads[track.id]
   val scheme = MaterialTheme.colorScheme
@@ -121,6 +157,8 @@ fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerCo
   Box(
     Modifier.fillMaxSize()
       .background(scheme.surface)
+      // Плеер лежит поверх экранов: касания не должны проходить к спискам под ним.
+      .pointerInput(Unit) { detectTapGestures { } }
       .pointerInput(Unit) { detectVerticalDragGestures { _, drag -> if (drag > 18) onCollapse() } }
   ) {
     // Фон: та же обложка, сильно размытая, под тёмной вуалью в цвет темы.
@@ -159,9 +197,14 @@ fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerCo
             )
           }
         }
-        IconButton(onClick = { showQueue = true }) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь") }
+        IconButton(onClick = { nav.addToPlaylist(track) }) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист") }
       }
 
+      if (showLyrics) {
+        Spacer(Modifier.height(8.dp))
+        LyricsPanel(lyrics, progress, controls::seekTo, Modifier.fillMaxWidth().weight(1f))
+        Spacer(Modifier.height(12.dp))
+      } else {
       Spacer(Modifier.weight(0.6f))
 
       // Обложка чуть «выдыхает» на паузе.
@@ -191,6 +234,7 @@ fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerCo
       }
 
       Spacer(Modifier.weight(0.5f))
+      }
 
       Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -206,6 +250,7 @@ fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerCo
             color = scheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Открыть исполнителя", onClick = onOpenArtist),
           )
         }
         DownloadButton(dl, onDownload = { actions.download(listOf(track)) }, onRemove = { actions.removeDownload(track) })
@@ -224,7 +269,14 @@ fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerCo
       Spacer(Modifier.height(8.dp))
       Controls(state, controls)
 
-      Spacer(Modifier.weight(0.4f))
+      Spacer(Modifier.height(if (showLyrics) 8.dp else 20.dp))
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        PlayerAction(Icons.Rounded.Lyrics, "Текст", showLyrics) { showLyrics = !showLyrics }
+        PlayerAction(Icons.Rounded.Bedtime, sleepLabel(sleep), sleep != SleepState.Off) { showSleep = true }
+        PlayerAction(Icons.Rounded.GraphicEq, "Эквалайзер", eqEnabled, onOpenEqualizer)
+        PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Очередь", false) { showQueue = true }
+      }
+      if (!showLyrics) Spacer(Modifier.weight(0.4f))
       if (state.error != null) {
         Text(state.error, style = MaterialTheme.typography.bodySmall, color = scheme.error)
       }
@@ -235,6 +287,74 @@ fun FullPlayer(state: PlayerState, progress: State<Progress>, controls: PlayerCo
   if (showQueue) {
     ModalBottomSheet(onDismissRequest = { showQueue = false }) {
       QueueList(state, onPick = controls::skipTo)
+    }
+  }
+  if (showSleep) {
+    ModalBottomSheet(onDismissRequest = { showSleep = false }) {
+      SleepSheet(sleep) {
+        onSleep(it)
+        showSleep = false
+      }
+    }
+  }
+}
+
+@Composable
+private fun PlayerAction(icon: ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
+  val scheme = MaterialTheme.colorScheme
+  Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(76.dp)) {
+    if (active) {
+      FilledTonalIconButton(onClick = onClick) { Icon(icon, label) }
+    } else {
+      IconButton(onClick = onClick) { Icon(icon, label, tint = scheme.onSurfaceVariant) }
+    }
+    Text(
+      label,
+      style = MaterialTheme.typography.labelSmall,
+      color = if (active) scheme.primary else scheme.onSurfaceVariant,
+      maxLines = 1,
+    )
+  }
+}
+
+/** Сколько осталось: «24 мин», «0:45», «Конец трека». */
+@Composable
+private fun sleepLabel(sleep: SleepState): String =
+  when (sleep) {
+    SleepState.Off -> "Таймер"
+    SleepState.EndOfTrack -> "Конец трека"
+    is SleepState.At -> {
+      val left by produceState(sleep.endsAt - SystemClock.elapsedRealtime(), sleep) {
+        while (true) {
+          value = sleep.endsAt - SystemClock.elapsedRealtime()
+          delay(1000)
+        }
+      }
+      val min = (left / 60_000).toInt()
+      if (min >= 1) "$min мин" else formatTime(left.coerceAtLeast(0))
+    }
+  }
+
+@Composable
+private fun SleepSheet(sleep: SleepState, onPick: (Int) -> Unit) {
+  Column(Modifier.navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 16.dp)) {
+    Text("Таймер сна", style = MaterialTheme.typography.titleLarge)
+    Text(
+      when (sleep) {
+        SleepState.Off -> "Музыка плавно затихнет и встанет на паузу"
+        SleepState.EndOfTrack -> "Остановится, когда закончится этот трек"
+        is SleepState.At -> "Остановится через ${sleepLabel(sleep)}"
+      },
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      listOf(15, 30, 45, 60, 90).forEach { m -> FilterChip(selected = false, onClick = { onPick(m) }, label = { Text("$m мин") }) }
+      FilterChip(selected = sleep == SleepState.EndOfTrack, onClick = { onPick(-1) }, label = { Text("Когда закончится трек") })
+    }
+    if (sleep != SleepState.Off) {
+      TextButton(onClick = { onPick(0) }, modifier = Modifier.padding(top = 8.dp)) { Text("Выключить таймер") }
     }
   }
 }

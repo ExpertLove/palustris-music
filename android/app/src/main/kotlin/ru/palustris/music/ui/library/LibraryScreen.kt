@@ -10,24 +10,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.FileDownload
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -35,6 +33,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,17 +42,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import ru.palustris.music.core.model.Track
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import ru.palustris.music.media.TrackDownload
+import ru.palustris.music.ui.common.FilledTonalTextButton
 import ru.palustris.music.ui.common.LoadingState
+import ru.palustris.music.ui.common.LocalNavigator
 import ru.palustris.music.ui.common.LocalTrackActions
-import ru.palustris.music.ui.common.LocalTrackMarks
 import ru.palustris.music.ui.common.MessageState
+import ru.palustris.music.ui.common.PlayActions
 import ru.palustris.music.ui.common.TrackRow
 import ru.palustris.music.ui.common.formatBytes
-import ru.palustris.music.ui.common.pluralTracks
+import ru.palustris.music.ui.common.plural
+import ru.palustris.music.ui.playlists.NameDialog
+import ru.palustris.music.ui.playlists.PlaylistListItem
 
-enum class LibraryTab { Likes, Downloads }
+enum class LibraryTab(val title: String) { Likes("Нравится"), Playlists("Плейлисты"), Downloads("Скачанные"), History("История") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,13 +71,18 @@ fun LibraryScreen(
 ) {
   val likes by vm.likes.collectAsStateWithLifecycle()
   val downloads by vm.downloads.collectAsStateWithLifecycle()
+  val playlists by vm.playlists.collectAsStateWithLifecycle()
+  val history by vm.history.collectAsStateWithLifecycle()
   val refreshing by vm.refreshing.collectAsStateWithLifecycle()
   val error by vm.error.collectAsStateWithLifecycle()
   val downloadsBytes by vm.downloadsBytes.collectAsStateWithLifecycle()
   var tab by rememberSaveable(initialTab) { mutableIntStateOf(initialTab.ordinal) }
+  var creating by remember { mutableStateOf(false) }
   val actions = LocalTrackActions.current
+  val nav = LocalNavigator.current
 
-  LaunchedEffect(Unit) { if (likes == null) vm.refresh() }
+  LaunchedEffect(Unit) { if (likes == null || playlists == null) vm.refresh() }
+  LaunchedEffect(tab) { if (tab == LibraryTab.History.ordinal) vm.refreshHistory() }
 
   Column(Modifier.fillMaxSize()) {
     Text(
@@ -78,115 +90,145 @@ fun LibraryScreen(
       style = MaterialTheme.typography.headlineLarge,
       modifier = Modifier.statusBarsPadding().padding(start = 20.dp, top = 12.dp, bottom = 8.dp),
     )
-    PrimaryTabRow(selectedTabIndex = tab) {
-      Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Нравится" + (likes?.size?.let { " · $it" } ?: "")) })
-      Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Скачанные · ${downloads.size}") })
-    }
-    if (tab == 0) {
-      PullToRefreshBox(isRefreshing = refreshing, onRefresh = vm::refresh, modifier = Modifier.weight(1f)) {
-        val list = likes
-        LazyColumn(contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
-          when {
-            list == null && error != null ->
-              item { MessageState("Не получилось загрузить", error, action = "Повторить", onAction = vm::refresh) }
-            list == null -> item { LoadingState() }
-            list.isEmpty() ->
-              item {
-                MessageState(
-                  "Здесь будут любимые треки",
-                  "Нажмите ♡ в плеере или в меню трека",
-                  icon = Icons.Rounded.FavoriteBorder,
-                )
-              }
-            else -> {
-              item { LikesHeader(list) }
-              itemsIndexed(list, key = { _, t -> "like:" + t.id }) { i, t ->
-                TrackRow(t, onClick = { actions.play(list, i) }, modifier = Modifier.padding(horizontal = 8.dp))
-              }
-            }
+    PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp) {
+      LibraryTab.entries.forEach { t ->
+        val count =
+          when (t) {
+            LibraryTab.Likes -> likes?.size
+            LibraryTab.Playlists -> playlists?.size
+            LibraryTab.Downloads -> downloads.size
+            LibraryTab.History -> null
           }
-        }
+        Tab(selected = tab == t.ordinal, onClick = { tab = t.ordinal }, text = { Text(t.title + (count?.let { " · $it" } ?: "")) })
       }
-    } else {
-      LazyColumn(contentPadding = contentPadding, modifier = Modifier.weight(1f)) {
-        if (downloads.isEmpty()) {
-          item {
-            MessageState(
-              "Пока ничего не скачано",
-              "Скачанные треки играют без интернета. Скачать можно из меню трека или кнопкой в плеере",
-              icon = Icons.Rounded.DownloadForOffline,
-            )
-          }
-        } else {
-          val done = downloads.filter { it.state == TrackDownload.State.Done }.map { it.track }
-          item {
-            Row(
-              Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Button(onClick = { actions.play(done, 0) }, enabled = done.isNotEmpty()) {
-                Icon(Icons.Rounded.PlayArrow, null, Modifier.size(ButtonDefaults.IconSize))
-                Spacer(Modifier.width(6.dp))
-                Text("Слушать")
+    }
+    PullToRefreshBox(
+      isRefreshing = refreshing,
+      onRefresh = { if (tab == LibraryTab.History.ordinal) vm.refreshHistory() else vm.refresh() },
+      modifier = Modifier.weight(1f),
+    ) {
+      LazyColumn(contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
+        when (LibraryTab.entries[tab]) {
+          LibraryTab.Likes -> {
+            val list = likes
+            when {
+              list == null && error != null ->
+                item { MessageState("Не получилось загрузить", error, action = "Повторить", onAction = vm::refresh) }
+              list == null -> item { LoadingState() }
+              list.isEmpty() ->
+                item { MessageState("Здесь будут любимые треки", "Нажмите ♡ в плеере или в меню трека", icon = Icons.Rounded.FavoriteBorder) }
+              else -> {
+                item { PlayActions(list) }
+                itemsIndexed(list, key = { _, t -> "like:" + t.id }) { i, t ->
+                  TrackRow(t, onClick = { actions.play(list, i) }, modifier = Modifier.padding(horizontal = 8.dp))
+                }
               }
-              FilledTonalButton(onClick = { actions.play(done.shuffled(), 0) }, enabled = done.size > 1) {
-                Icon(Icons.Rounded.Shuffle, null, Modifier.size(ButtonDefaults.IconSize))
-              }
-              Spacer(Modifier.weight(1f))
-              AssistChip(
-                onClick = onOpenSettings,
-                label = { Text(downloadsBytes?.let(::formatBytes) ?: "…") },
-                leadingIcon = { Icon(Icons.Rounded.Storage, null, Modifier.size(18.dp)) },
-              )
             }
           }
-          itemsIndexed(downloads, key = { _, d -> "dl:" + d.track.id }) { _, d ->
-            val sub =
-              when (d.state) {
-                TrackDownload.State.Queued -> "В очереди на скачивание"
-                TrackDownload.State.Downloading -> d.progress?.let { "Скачивается… ${(it * 100).toInt()}%" } ?: "Скачивается…"
-                TrackDownload.State.Failed -> "Не скачался. Меню → «Скачать ещё раз»"
-                TrackDownload.State.Done -> "${d.track.artist} · ${formatBytes(d.bytes)}"
+          LibraryTab.Playlists -> {
+            item {
+              Row(Modifier.fillMaxWidth().padding(16.dp)) {
+                FilledTonalTextButton("Новый плейлист", { creating = true }, Icons.Rounded.Add)
               }
-            TrackRow(
-              d.track,
-              onClick = { if (done.isNotEmpty()) actions.play(done, done.indexOfFirst { it.id == d.track.id }.coerceAtLeast(0)) },
-              subtitle = sub,
-              modifier = Modifier.padding(horizontal = 8.dp),
-            )
+            }
+            val list = playlists
+            when {
+              list == null -> item { LoadingState() }
+              list.isEmpty() ->
+                item {
+                  MessageState(
+                    "Плейлистов пока нет",
+                    "Соберите свой или сохраните альбом кнопкой «+» на его странице",
+                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                  )
+                }
+              else -> items(list, key = { "pl:" + it.id }) { p -> PlaylistListItem(p) { nav.openPlaylist(p.id) } }
+            }
+          }
+          LibraryTab.Downloads -> downloadsTab(downloads, downloadsBytes, onOpenSettings)
+          LibraryTab.History -> {
+            val list = history
+            when {
+              list == null -> item { LoadingState() }
+              list.isEmpty() ->
+                item { MessageState("История пуста", "Здесь появятся треки, которые вы дослушали", icon = Icons.Rounded.History) }
+              else -> {
+                val tracks = list.map { it.toTrack() }
+                itemsIndexed(list, key = { _, h -> "h:" + h.id }) { i, h ->
+                  TrackRow(
+                    tracks[i],
+                    onClick = { actions.play(tracks, i) },
+                    subtitle = "${h.artist} · ${whenPlayed(h.playedAt)}" + if (h.plays > 1) " · " + plural(h.plays, "раз", "раза", "раз") else "",
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                  )
+                }
+              }
+            }
           }
         }
       }
     }
   }
+
+  if (creating) {
+    NameDialog("Новый плейлист", confirm = "Создать", onDismiss = { creating = false }) {
+      creating = false
+      vm.createPlaylist(it) { id -> nav.openPlaylist(id) }
+    }
+  }
 }
 
-@Composable
-private fun LikesHeader(list: List<Track>) {
-  val actions = LocalTrackActions.current
-  val marks = LocalTrackMarks.current
-  val missing = list.filter { it.id !in marks.downloads }
-  Row(
-    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    Button(onClick = { actions.play(list, 0) }) {
-      Icon(Icons.Rounded.PlayArrow, null, Modifier.size(ButtonDefaults.IconSize))
-      Spacer(Modifier.width(6.dp))
-      Text("Слушать")
+private fun LazyListScope.downloadsTab(downloads: List<TrackDownload>, bytes: Long?, onOpenSettings: () -> Unit) {
+  if (downloads.isEmpty()) {
+    item {
+      MessageState(
+        "Пока ничего не скачано",
+        "Скачанные треки играют без интернета. Скачать можно из меню трека или кнопкой в плеере",
+        icon = Icons.Rounded.DownloadForOffline,
+      )
     }
-    FilledTonalButton(onClick = { actions.play(list.shuffled(), 0) }, enabled = list.size > 1) {
-      Icon(Icons.Rounded.Shuffle, null, Modifier.size(ButtonDefaults.IconSize))
+    return
+  }
+  val done = downloads.filter { it.state == TrackDownload.State.Done }.map { it.track }
+  item {
+    PlayActions(done) {
+      AssistChip(
+        onClick = onOpenSettings,
+        label = { Text(bytes?.let(::formatBytes) ?: "…") },
+        leadingIcon = { Icon(Icons.Rounded.Storage, null, Modifier.size(18.dp)) },
+      )
     }
-    Spacer(Modifier.weight(1f))
-    if (missing.isNotEmpty()) {
-      FilledTonalButton(onClick = { actions.download(missing) }) {
-        Icon(Icons.Rounded.FileDownload, null, Modifier.size(ButtonDefaults.IconSize))
-        Spacer(Modifier.width(6.dp))
-        Text(if (missing.size == list.size) "Скачать все" else "Ещё ${pluralTracks(missing.size)}")
+  }
+  items(downloads, key = { "dl:" + it.track.id }) { d ->
+    val actions = LocalTrackActions.current
+    val sub =
+      when (d.state) {
+        TrackDownload.State.Queued -> "В очереди на скачивание"
+        TrackDownload.State.Downloading -> d.progress?.let { "Скачивается… ${(it * 100).toInt()}%" } ?: "Скачивается…"
+        TrackDownload.State.Failed -> "Не скачался. Меню → «Скачать ещё раз»"
+        TrackDownload.State.Done -> "${d.track.artist} · ${formatBytes(d.bytes)}"
       }
-    }
+    TrackRow(
+      d.track,
+      onClick = { if (done.isNotEmpty()) actions.play(done, done.indexOfFirst { it.id == d.track.id }.coerceAtLeast(0)) },
+      subtitle = sub,
+      modifier = Modifier.padding(horizontal = 8.dp),
+    )
+  }
+}
+
+/** «сегодня, 14:05», «вчера», «12 ноя». */
+private fun whenPlayed(unixSec: Long): String {
+  if (unixSec <= 0) return ""
+  val then = Calendar.getInstance().apply { timeInMillis = unixSec * 1000 }
+  val now = Calendar.getInstance()
+  val sameYear = then.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+  val days = now.get(Calendar.DAY_OF_YEAR) - then.get(Calendar.DAY_OF_YEAR)
+  val ru = Locale.forLanguageTag("ru")
+  return when {
+    sameYear && days == 0 -> "сегодня, " + SimpleDateFormat("HH:mm", ru).format(Date(unixSec * 1000))
+    sameYear && days == 1 -> "вчера"
+    sameYear -> SimpleDateFormat("d MMM", ru).format(Date(unixSec * 1000))
+    else -> SimpleDateFormat("d MMM yyyy", ru).format(Date(unixSec * 1000))
   }
 }

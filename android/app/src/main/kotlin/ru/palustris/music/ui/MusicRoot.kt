@@ -62,6 +62,13 @@ import ru.palustris.music.core.prefs.Session
 import ru.palustris.music.ui.auth.AuthScreen
 import ru.palustris.music.ui.common.LocalTrackActions
 import ru.palustris.music.ui.common.LocalTrackMarks
+import ru.palustris.music.ui.common.LocalNavigator
+import ru.palustris.music.ui.common.Navigator
+import ru.palustris.music.ui.catalog.ArtistScreen
+import ru.palustris.music.ui.catalog.CollectionScreen
+import ru.palustris.music.ui.equalizer.EqualizerScreen
+import ru.palustris.music.ui.playlists.AddToPlaylistSheet
+import ru.palustris.music.ui.playlists.PlaylistScreen
 import ru.palustris.music.ui.home.HomeScreen
 import ru.palustris.music.ui.library.LibraryScreen
 import ru.palustris.music.ui.library.LibraryTab
@@ -79,6 +86,14 @@ import ru.palustris.music.ui.theme.MusicTheme
 @Serializable data class LibraryKey(val tab: LibraryTab = LibraryTab.Likes) : NavKey
 
 @Serializable data object SettingsKey : NavKey
+
+@Serializable data class ArtistKey(val id: String?, val name: String) : NavKey
+
+@Serializable data class CollectionKey(val id: String) : NavKey
+
+@Serializable data class PlaylistKey(val id: Long) : NavKey
+
+@Serializable data object EqualizerKey : NavKey
 
 private enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
   Home("Главная", Icons.Outlined.Home, Icons.Rounded.Home),
@@ -109,6 +124,10 @@ private fun MainScaffold(vm: MainViewModel) {
   val playerState by vm.playerState.collectAsStateWithLifecycle()
   val marks by vm.marks.collectAsStateWithLifecycle()
   val progress = vm.player.progress.collectAsState(initial = ru.palustris.music.media.Progress(0, 0, 0))
+  val sleep by vm.sleep.collectAsStateWithLifecycle()
+  val eqEnabled by vm.eqEnabled.collectAsStateWithLifecycle()
+  val pickFor by vm.pickPlaylistFor.collectAsStateWithLifecycle()
+  val playlists by vm.playlists.collectAsStateWithLifecycle()
   val backStack = rememberNavBackStack(HomeKey)
   var expanded by rememberSaveable { mutableStateOf(false) }
   val snackbar = remember { SnackbarHostState() }
@@ -135,13 +154,14 @@ private fun MainScaffold(vm: MainViewModel) {
   BackHandler(enabled = expanded) { expanded = false }
 
   val top = backStack.lastOrNull()
+  // Вкладка подсвечивается по корню текущей ветки: страница исполнителя из поиска — это всё ещё «Поиск».
   val currentTab =
-    when (top) {
+    when (backStack.getOrNull(1)) {
       is SearchKey -> Tab.Search
       is LibraryKey -> Tab.Library
-      is SettingsKey -> null
+      null -> Tab.Home
       else -> Tab.Home
-    }
+    }.takeIf { top !is SettingsKey && top !is EqualizerKey }
   fun select(tab: Tab, libraryTab: LibraryTab = LibraryTab.Likes) {
     // «Главная» — корень; другие вкладки лежат поверх неё, и «назад» ведёт на главную.
     while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
@@ -152,8 +172,27 @@ private fun MainScaffold(vm: MainViewModel) {
     }
   }
   val contentPadding = PaddingValues(bottom = bottomHeight + 12.dp)
+  fun push(key: NavKey) {
+    expanded = false
+    if (backStack.lastOrNull() != key) backStack.add(key)
+  }
+  val navigator =
+    remember(backStack) {
+      object : Navigator {
+        override fun openArtist(id: String?, name: String) = push(ArtistKey(id, name))
 
-  CompositionLocalProvider(LocalTrackActions provides vm, LocalTrackMarks provides marks) {
+        override fun openCollection(id: String) = push(CollectionKey(id))
+
+        override fun openPlaylist(id: Long) = push(PlaylistKey(id))
+
+        override fun openEqualizer() = push(EqualizerKey)
+
+        override fun addToPlaylist(track: ru.palustris.music.core.model.Track) = vm.askPlaylistFor(track)
+      }
+    }
+  val back: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) }
+
+  CompositionLocalProvider(LocalTrackActions provides vm, LocalTrackMarks provides marks, LocalNavigator provides navigator) {
     Box(Modifier.fillMaxSize()) {
       NavDisplay(
         backStack = backStack,
@@ -179,10 +218,15 @@ private fun MainScaffold(vm: MainViewModel) {
             entry<SettingsKey> {
               SettingsScreen(
                 contentPadding,
-                onBack = { backStack.removeAt(backStack.lastIndex) },
+                onBack = back,
                 onLogout = vm::logout,
+                onOpenEqualizer = { push(EqualizerKey) },
               )
             }
+            entry<ArtistKey> { k -> ArtistScreen(k.id, k.name, contentPadding, onBack = back) }
+            entry<CollectionKey> { k -> CollectionScreen(k.id, contentPadding, onBack = back, onMessage = vm::message) }
+            entry<PlaylistKey> { k -> PlaylistScreen(k.id, contentPadding, onBack = back, onMessage = vm::message) }
+            entry<EqualizerKey> { EqualizerScreen(contentPadding, onBack = back) }
           },
       )
 
@@ -220,7 +264,29 @@ private fun MainScaffold(vm: MainViewModel) {
         enter = slideInVertically(tween(380)) { it } + fadeIn(tween(200)),
         exit = slideOutVertically(tween(300)) { it } + fadeOut(tween(300)),
       ) {
-        FullPlayer(playerState, progress, controls = vm, onCollapse = { expanded = false })
+        FullPlayer(
+          playerState,
+          progress,
+          controls = vm,
+          onCollapse = { expanded = false },
+          sleep = sleep,
+          onSleep = vm::setSleep,
+          eqEnabled = eqEnabled,
+          onOpenEqualizer = { push(EqualizerKey) },
+          onOpenArtist = {
+            playerState.track?.let { t -> push(ArtistKey(t.artistId, t.artist.substringBefore(',').trim())) }
+          },
+        )
+      }
+
+      pickFor?.let { t ->
+        AddToPlaylistSheet(
+          t,
+          playlists,
+          onDismiss = { vm.askPlaylistFor(null) },
+          onPick = { p -> vm.addToPlaylist(p, t) },
+          onCreate = { name -> vm.createPlaylistWith(name, t) },
+        )
       }
     }
   }

@@ -32,6 +32,9 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.QueuePlayNext
 import androidx.compose.material.icons.rounded.Delete
@@ -160,6 +163,7 @@ fun TrackRow(
   modifier: Modifier = Modifier,
   subtitle: String? = null,
   leading: (@Composable () -> Unit)? = null,
+  extra: List<ExtraAction> = emptyList(),
 ) {
   val marks = LocalTrackMarks.current
   val actions = LocalTrackActions.current
@@ -227,7 +231,7 @@ fun TrackRow(
     }
     Box {
       IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "Ещё") }
-      TrackMenu(track, expanded = menu, onDismiss = { menu = false }, liked = track.id in marks.liked, dl = dl, actions = actions)
+      TrackMenu(track, expanded = menu, onDismiss = { menu = false }, liked = track.id in marks.liked, dl = dl, actions = actions, extra = extra)
     }
   }
 }
@@ -240,7 +244,9 @@ private fun TrackMenu(
   liked: Boolean,
   dl: TrackDownload?,
   actions: TrackActions,
+  extra: List<ExtraAction>,
 ) {
+  val nav = LocalNavigator.current
   DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(20.dp)) {
     fun item(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, action: () -> Unit) =
       @Composable {
@@ -254,7 +260,8 @@ private fun TrackMenu(
         )
       }
     item("Играть следующим", Icons.Rounded.QueuePlayNext) { actions.playNext(track) }()
-    item("Добавить в очередь", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.enqueue(track) }()
+    item("Добавить в очередь", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(track) }()
+    item("В плейлист", Icons.AutoMirrored.Rounded.PlaylistAdd) { nav.addToPlaylist(track) }()
     if (liked) item("Убрать из «Нравится»", Icons.Rounded.Favorite) { actions.toggleLike(track) }()
     else item("Нравится", Icons.Rounded.FavoriteBorder) { actions.toggleLike(track) }()
     when (dl?.state) {
@@ -263,6 +270,9 @@ private fun TrackMenu(
       TrackDownload.State.Done -> item("Удалить с телефона", Icons.Rounded.Delete) { actions.removeDownload(track) }()
       else -> item("Отменить загрузку", Icons.Rounded.Delete) { actions.removeDownload(track) }()
     }
+    item("Исполнитель", Icons.Rounded.Person) { nav.openArtist(track.artistId, track.artist.substringBefore(',').trim()) }()
+    track.albumId?.let { album -> item("Альбом", Icons.Rounded.Album) { nav.openCollection(album) }() }
+    extra.forEach { e -> item(e.title, e.icon, e.onClick)() }
   }
 }
 

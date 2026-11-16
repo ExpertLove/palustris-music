@@ -10,7 +10,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import android.content.Context
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
@@ -23,7 +27,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
+import ru.palustris.music.media.eq.EqualizerProcessor
+import ru.palustris.music.media.eq.EqualizerStore
 import ru.palustris.music.MainActivity
 import ru.palustris.music.R
 import ru.palustris.music.core.model.IdsBody
@@ -41,14 +51,26 @@ import timber.log.Timber
 class PlaybackService : MediaSessionService() {
   @Inject lateinit var storage: AudioStorage
   @Inject lateinit var api: MusicApi
+  @Inject lateinit var equalizer: EqualizerStore
+  @Inject lateinit var queueStore: QueueStore
+  @Inject lateinit var sleepTimer: SleepTimer
 
   private var session: MediaSession? = null
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
   override fun onCreate() {
     super.onCreate()
+    // Эквалайзер встраивается в цепочку обработки звука каждого плеера.
+    val renderers =
+      object : DefaultRenderersFactory(this) {
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
+          DefaultAudioSink.Builder(context)
+            .setAudioProcessors(arrayOf(EqualizerProcessor { equalizer.snapshot }))
+            .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
+            .build()
+      }
     val player =
-      ExoPlayer.Builder(this)
+      ExoPlayer.Builder(this, renderers)
         .setMediaSourceFactory(DefaultMediaSourceFactory(storage.playbackDataSourceFactory()))
         .setAudioAttributes(
           AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(),
@@ -60,6 +82,9 @@ class PlaybackService : MediaSessionService() {
         .setWakeMode(C.WAKE_MODE_NETWORK)
         .build()
     player.addListener(Reporter(player))
+    sleepTimer.player = player
+    restoreQueue(player)
+    persistQueue(player)
 
     val open =
       PendingIntent.getActivity(
@@ -82,6 +107,9 @@ class PlaybackService : MediaSessionService() {
   }
 
   override fun onDestroy() {
+    session?.player?.let { p -> queueStore.snapshot(p).let { q -> runBlocking { queueStore.save(q) } } }
+    sleepTimer.cancel()
+    sleepTimer.player = null
     scope.cancel()
     session?.run {
       player.release()
@@ -98,6 +126,62 @@ class PlaybackService : MediaSessionService() {
       mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> =
       Futures.immediateFuture(mediaItems.map { it.withPlayableUri() }.toMutableList())
+
+    /**
+     * Кнопка «играть» на гарнитуре или в системной шторке, когда приложение не запущено:
+     * продолжаем с того места, где остановились.
+     */
+    override fun onPlaybackResumption(
+      mediaSession: MediaSession,
+      controller: MediaSession.ControllerInfo,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+      val q = runBlocking { withTimeoutOrNull(2_000) { queueStore.load() } }
+        ?: return Futures.immediateFailedFuture(UnsupportedOperationException("нет сохранённой очереди"))
+      return Futures.immediateFuture(
+        MediaSession.MediaItemsWithStartPosition(with(queueStore) { q.toMediaItems() }, q.index, q.positionMs)
+      )
+    }
+  }
+
+  /** Открыли приложение после выгрузки: показываем прошлую очередь на паузе, на том же месте. */
+  private fun restoreQueue(player: ExoPlayer) {
+    scope.launch {
+      val q = queueStore.load() ?: return@launch
+      if (player.mediaItemCount > 0) return@launch // пользователь уже что-то включил
+      player.setMediaItems(with(queueStore) { q.toMediaItems() }, q.index, q.positionMs)
+      player.prepare()
+    }
+  }
+
+  /** Сохраняем очередь при её изменении и раз в 10 секунд позицию, пока играет. */
+  private fun persistQueue(player: ExoPlayer) {
+    player.addListener(
+      object : Player.Listener {
+        override fun onEvents(p: Player, events: Player.Events) {
+          if (
+            events.containsAny(
+              Player.EVENT_TIMELINE_CHANGED,
+              Player.EVENT_MEDIA_ITEM_TRANSITION,
+              Player.EVENT_IS_PLAYING_CHANGED,
+              Player.EVENT_POSITION_DISCONTINUITY,
+            )
+          ) {
+            val q = queueStore.snapshot(p)
+            scope.launch { queueStore.save(q) }
+          }
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+          if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) sleepTimer.onTrackEndedPause()
+        }
+      }
+    )
+    scope.launch {
+      while (isActive) {
+        delay(10_000)
+        if (player.isPlaying) queueStore.snapshot(player).let { q -> launch { queueStore.save(q) } }
+      }
+    }
   }
 
   /**

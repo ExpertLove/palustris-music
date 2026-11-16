@@ -40,7 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.palustris.music.core.model.ArtistCard
-import ru.palustris.music.ui.common.Artwork
+import ru.palustris.music.ui.common.AlbumRow
+import ru.palustris.music.ui.common.ArtistBubble
+import ru.palustris.music.ui.common.LocalNavigator
 import ru.palustris.music.ui.common.LoadingState
 import ru.palustris.music.ui.common.LocalTrackActions
 import ru.palustris.music.ui.common.MessageState
@@ -51,6 +53,7 @@ import ru.palustris.music.ui.common.TrackRow
 fun SearchScreen(contentPadding: PaddingValues, vm: SearchViewModel = hiltViewModel()) {
   val ui by vm.ui.collectAsStateWithLifecycle()
   val actions = LocalTrackActions.current
+  val nav = LocalNavigator.current
   val focus = LocalFocusManager.current
   val result = ui.result
 
@@ -100,10 +103,12 @@ fun SearchScreen(contentPadding: PaddingValues, vm: SearchViewModel = hiltViewMo
           item { SectionTitle("Исполнители") }
           item {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-              items(artists, key = { it.id }) { a -> ArtistBubble(a) { vm.onQuery(a.name) } }
+              items(artists, key = { it.id }) { a -> ArtistBubble(a) { nav.openArtist(a.id, a.name) } }
             }
           }
         }
+        item { AlbumRow("Альбомы", result.albums) { nav.openCollection(it.id) } }
+        item { AlbumRow("Плейлисты", result.playlists) { nav.openCollection(it.id) } }
         if (result.tracks.isNotEmpty()) {
           item {
             SectionTitle("Треки")
@@ -114,23 +119,5 @@ fun SearchScreen(contentPadding: PaddingValues, vm: SearchViewModel = hiltViewMo
         }
       }
     }
-  }
-}
-
-@Composable
-private fun ArtistBubble(artist: ArtistCard, onClick: () -> Unit) {
-  Column(
-    Modifier.width(96.dp).clickable(onClick = onClick, role = androidx.compose.ui.semantics.Role.Button),
-    horizontalAlignment = Alignment.CenterHorizontally,
-  ) {
-    Artwork(artist.thumb, Modifier.size(88.dp), size = 226, shape = CircleShape)
-    Text(
-      artist.name,
-      style = MaterialTheme.typography.labelLarge,
-      maxLines = 2,
-      textAlign = TextAlign.Center,
-      overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.padding(top = 8.dp),
-    )
   }
 }

@@ -23,6 +23,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -56,7 +57,13 @@ import ru.palustris.music.ui.common.formatMb
 import ru.palustris.music.ui.common.pluralTracks
 
 @Composable
-fun SettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onLogout: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+  contentPadding: PaddingValues,
+  onBack: () -> Unit,
+  onLogout: () -> Unit,
+  onOpenEqualizer: () -> Unit,
+  vm: SettingsViewModel = hiltViewModel(),
+) {
   val settings by vm.settings.collectAsStateWithLifecycle()
   val usage by vm.usage.collectAsStateWithLifecycle()
   val email by vm.email.collectAsStateWithLifecycle()
@@ -68,6 +75,19 @@ fun SettingsScreen(contentPadding: PaddingValues, onBack: () -> Unit, onLogout: 
       Row(Modifier.statusBarsPadding().padding(start = 4.dp, top = 8.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
         Text("Настройки", style = MaterialTheme.typography.headlineMedium)
+      }
+    }
+
+    item { Header("Звук") }
+    item {
+      Card(onClick = onOpenEqualizer) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Column(Modifier.weight(1f)) {
+            Text("Эквалайзер", style = MaterialTheme.typography.titleMedium)
+            Text("10 полос и готовые настройки", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          }
+          Icon(Icons.Rounded.GraphicEq, null)
+        }
       }
     }
 

@@ -35,3 +35,24 @@ val LocalTrackActions =
   staticCompositionLocalOf<TrackActions> { error("TrackActions не предоставлены") }
 
 val LocalTrackMarks = androidx.compose.runtime.compositionLocalOf { TrackMarks() }
+
+/** Переходы между разделами, доступные из любого экрана и из плеера. */
+@Stable
+interface Navigator {
+  fun openArtist(id: String?, name: String)
+
+  fun openCollection(id: String)
+
+  fun openPlaylist(id: Long)
+
+  fun openEqualizer()
+
+  /** Выбрать плейлист, куда добавить трек. */
+  fun addToPlaylist(track: Track)
+}
+
+val LocalNavigator = staticCompositionLocalOf<Navigator> { error("Navigator не предоставлен") }
+
+/** Дополнительный пункт меню трека, зависящий от экрана (например, «Убрать из плейлиста»). */
+@Immutable
+data class ExtraAction(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit)
