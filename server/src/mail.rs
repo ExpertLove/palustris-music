@@ -33,13 +33,37 @@ impl Mailer {
     pub async fn send_verification(&self, to: &str, token: &str) -> anyhow::Result<()> {
         let link = format!("{}/api/verify?token={}", self.base_url.trim_end_matches('/'), token);
         let body = format!(
-            "Привет!\n\nПодтверди почту для входа в «Музыку»:\n{link}\n\nСсылка действует 24 часа. \
-             Если ты не регистрировался — просто удали это письмо.\n"
+            "Привет!
+
+Подтверди почту для входа в «Музыку»:
+{link}
+
+Ссылка действует 24 часа.              Если ты не регистрировался — просто удали это письмо.
+"
         );
+        self.send(to, "Подтверждение почты — Музыка", body).await
+    }
+
+    pub async fn send_reset(&self, to: &str, token: &str) -> anyhow::Result<()> {
+        let link = format!("{}/reset?token={}", self.base_url.trim_end_matches('/'), token);
+        let body = format!(
+            "Привет!
+
+Кто-то (надеемся, ты) попросил сбросить пароль в «Музыке».
+             Задать новый пароль:
+{link}
+
+Ссылка действует 1 час и сработает один раз.              Если это был не ты — ничего не делай, пароль останется прежним.
+"
+        );
+        self.send(to, "Сброс пароля — Музыка", body).await
+    }
+
+    async fn send(&self, to: &str, subject: &str, body: String) -> anyhow::Result<()> {
         let msg = Message::builder()
             .from(self.from.parse()?)
             .to(to.parse()?)
-            .subject("Подтверждение почты — Музыка")
+            .subject(subject)
             .header(ContentType::TEXT_PLAIN)
             .body(body)?;
 
@@ -60,18 +84,18 @@ impl Mailer {
 /// HTML-страница после перехода по ссылке — без SPA, чтобы работало из письма.
 pub fn verify_page(ok: bool) -> String {
     let (title, text, color) = if ok {
-        ("Почта подтверждена", "Можно возвращаться в приложение.", "#a78bfa")
+        ("Почта подтверждена", "Можно возвращаться к музыке.", "#7ee2a8")
     } else {
-        ("Ссылка недействительна", "Она устарела или уже использована. Отправь письмо заново в аккаунте.", "#fb7185")
+        ("Ссылка не сработала", "Она устарела или уже использована. Отправь письмо заново в профиле.", "#ff8a8a")
     };
     format!(
-        r#"<!doctype html><meta charset="utf-8"><title>{title}</title>
-<body style="margin:0;height:100vh;display:grid;place-items:center;background:#07060d;color:#f2efff;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
-<div style="text-align:center;max-width:420px;padding:32px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:#12102a">
-<div style="font-size:38px;color:{color}">●</div>
-<h1 style="margin:12px 0 8px;font-size:22px">{title}</h1>
-<p style="margin:0 0 20px;color:#928ba9">{text}</p>
-<a href="/" style="display:inline-block;padding:11px 22px;border-radius:999px;color:#fff;text-decoration:none;background:linear-gradient(120deg,#8b5cf6,#2563eb)">Открыть Музыку</a>
-</div></body>"#
+        r#"<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#0c0d10;color:#f3f1ec;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+<main style="text-align:center;max-width:420px;padding:36px 28px">
+<div style="width:56px;height:56px;margin:0 auto 18px;border-radius:50%;background:{color};opacity:.9"></div>
+<h1 style="margin:0 0 8px;font-size:26px;letter-spacing:-.01em">{title}</h1>
+<p style="margin:0 0 26px;color:#a3a3ad">{text}</p>
+<a href="/" style="display:inline-block;padding:13px 26px;border-radius:999px;color:#0c0d10;background:#f3f1ec;text-decoration:none;font-weight:600">Открыть Музыку</a>
+</main></body></html>"#
     )
 }

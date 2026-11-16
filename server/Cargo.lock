@@ -819,6 +819,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
+ "futures-util",
  "lettre",
  "rand 0.8.8",
  "reqwest",

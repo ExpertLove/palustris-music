@@ -13,6 +13,18 @@ pub struct Track {
     pub duration: i64,
     #[serde(default)]
     pub thumb: Option<String>,
+    /// browseId исполнителя в YouTube Music — только из свежих ответов YTM, в базе не хранится.
+    #[serde(default, rename = "artistId", skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<String>,
+    /// browseId альбома (MPREb_…), если известен.
+    #[serde(default, rename = "albumId", skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
+}
+
+impl Track {
+    pub fn new(id: String, title: String, artist: String) -> Self {
+        Track { id, title, artist, album: None, duration: 0, thumb: None, artist_id: None, album_id: None }
+    }
 }
 
 pub const TRACK_COLS: &str = "track_id, title, artist, album, duration, thumb";
@@ -25,6 +37,8 @@ pub fn row_track(r: &Row) -> rusqlite::Result<Track> {
         album: r.get(3)?,
         duration: r.get(4)?,
         thumb: r.get(5)?,
+        artist_id: None,
+        album_id: None,
     })
 }
 
@@ -101,5 +115,36 @@ pub fn open(path: &Path) -> anyhow::Result<Connection> {
     let _ = c.execute("ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''", []);
     let _ = c.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0", []);
     let _ = c.execute("ALTER TABLE users ADD COLUMN consent_at INTEGER NOT NULL DEFAULT 0", []);
+    // Сессии со скользящим сроком жизни: seen — последнее обращение.
+    let _ = c.execute("ALTER TABLE sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0", []);
+    // Публичная ссылка на плейлист.
+    let _ = c.execute("ALTER TABLE playlists ADD COLUMN share TEXT", []);
+    c.execute_batch(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS playlists_share ON playlists(share) WHERE share IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+        CREATE TABLE IF NOT EXISTS password_tokens(
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created INTEGER NOT NULL,
+            expires INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS skips(
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            track_id TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS skips_user ON skips(user_id, at);
+        CREATE TABLE IF NOT EXISTS lyrics(
+            key TEXT PRIMARY KEY,
+            synced TEXT,
+            plain TEXT,
+            instrumental INTEGER NOT NULL DEFAULT 0,
+            found INTEGER NOT NULL DEFAULT 0,
+            fetched INTEGER NOT NULL
+        );
+        "#,
+    )?;
     Ok(c)
 }

@@ -33,7 +33,20 @@ pub fn top_artists(db: &rusqlite::Connection, user: i64) -> Vec<(String, f64)> {
             None => *acc.entry(row).or_default() += 3.0,
         }
     }
-    let mut v: Vec<_> = acc.into_iter().collect();
+    // Пропуски за месяц снижают вес исполнителя: затухают быстрее лайков и истории.
+    if let Ok(mut st) = db.prepare("SELECT artist, at FROM skips WHERE user_id=?1 AND at > ?2") {
+        if let Ok(rows) = st.query_map(params![user, now - 30 * 86400], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        }) {
+            for (artist, at) in rows.flatten() {
+                if let Some(w) = acc.get_mut(&artist) {
+                    let days = (now - at) as f64 / 86400.0;
+                    *w -= 0.4 * (-days / 10.0).exp();
+                }
+            }
+        }
+    }
+    let mut v: Vec<_> = acc.into_iter().filter(|(_, w)| *w > 0.05).collect();
     v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     v.into_iter().take(6).collect()
 }
@@ -43,7 +56,8 @@ pub fn recent_ids(db: &rusqlite::Connection, user: i64, days: i64) -> HashSet<St
     let now = now();
     if let Ok(mut st) = db.prepare(
         "SELECT track_id FROM likes WHERE user_id=?1
-         UNION SELECT track_id FROM history WHERE user_id=?1 AND played_at > ?2",
+         UNION SELECT track_id FROM history WHERE user_id=?1 AND played_at > ?2
+         UNION SELECT track_id FROM skips WHERE user_id=?1 AND at > ?2 - 27 * 86400",
     ) {
         if let Ok(rows) = st.query_map(params![user, now - days * 86400], |r| r.get::<_, String>(0)) {
             set.extend(rows.flatten());
@@ -366,6 +380,8 @@ mod tests {
                 album: None,
                 duration: 200,
                 thumb: None,
+                artist_id: None,
+                album_id: None,
             },
             String::new(),
         )
