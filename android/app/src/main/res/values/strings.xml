@@ -1,3 +1,11 @@
 <resources>
     <string name="app_name">Музыка</string>
+    <string name="downloads_channel">Загрузки</string>
+    <string name="downloads_channel_description">Прогресс скачивания треков на телефон</string>
+    <plurals name="downloads_left">
+        <item quantity="one">Скачивается %d трек</item>
+        <item quantity="few">Скачивается %d трека</item>
+        <item quantity="many">Скачивается %d треков</item>
+        <item quantity="other">Скачивается %d трека</item>
+    </plurals>
 </resources>

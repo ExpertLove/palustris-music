@@ -22,10 +22,11 @@ export ANDROID_HOME="$LOCALAPPDATA/Android/Sdk"
 export PATH="$PATH:$USERPROFILE/AppData/AndroidCLI:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
 ```
 
-**Emulator acceleration is NOT installed yet** (needs admin). Until the user runs
-`%LOCALAPPDATA%\Android\Sdk\extras\google\Android_Emulator_Hypervisor_Driver\silent_install.bat`
-as administrator, the emulator cannot boot. Use a real phone over USB (`adb devices`) or
-`android preview render` (renders Compose @Preview to PNG without a device).
+Emulator acceleration (AEHD 2.2) is installed. `android emulator start Pixel_9_API_37` boots in about 3 minutes.
+
+**Test account** for the emulator: `C:\Users\test2\.android-keys\test-account.txt` (`android-test@palustris.ru`).
+Delete it via `DELETE /api/account` when it is no longer needed. Log in with `adb shell input text` after
+tapping the fields. `android layout --flat -o file.json` gives the center of each element for `adb shell input tap`.
 
 ## Commands
 
@@ -65,27 +66,67 @@ Never regenerate the key: installed apps can only be updated with the same key.
 
 ## Stack (versions in gradle/libs.versions.toml)
 
-Kotlin 2.4 · Jetpack Compose (BOM 2026.09) + **Material3 1.5.0-rc01** (Expressive APIs) · Navigation 3 ·
-Media3 1.11 (ExoPlayer, MediaSessionService, OkHttp datasource, ui-compose) · Hilt (KSP) · Room · DataStore ·
+Kotlin 2.4 · Jetpack Compose (BOM 2026.09) + **Material3 1.5.0-rc01** (Expressive APIs) + material-icons-extended · Navigation 3 ·
+Media3 1.11 (ExoPlayer, MediaSessionService, OkHttp datasource, DownloadManager) · Hilt (KSP) · DataStore ·
 Retrofit 3 + kotlinx.serialization · OkHttp 5 · Coil 3 · Palette · Timber · SplashScreen · ProfileInstaller.
+No Room yet: the download list lives in Media3's own DownloadIndex. Add Room when playlists or history go offline.
 minSdk 26, target/compile 37.
 
-## Architecture (target)
+## Architecture (as built)
 
 ```
 ru.palustris.music
-├─ core/        network (Retrofit, auth interceptor), database (Room), datastore, di modules
-├─ data/        repositories: auth, catalog/search, library (likes, playlists, history), lyrics
-├─ playback/    PlaybackService (MediaSessionService + ExoPlayer), queue, EQ (android.media.audiofx), cache
-├─ ui/
-│  ├─ theme/    MusicTheme: M3 Expressive, dynamic color from artwork (Palette), motion scheme
-│  ├─ player/   mini player, full-screen player, lyrics, queue, equalizer
-│  └─ <feature>/ home (wave), search, library, artist, album, playlist, settings, auth
-└─ MainActivity (single activity, edge-to-edge, Navigation 3)
+├─ core/   AppModule (OkHttp + auth interceptor, Retrofit, Json, @AppScope), net/ (MusicApi, apiCall → Russian error text),
+│          model/ (Track…), prefs/ (SessionStore: token; SettingsStore: cache limit, download quality, Wi-Fi only)
+├─ data/   LibraryRepository (likes, optimistic)
+├─ media/  PlaybackService (MediaSessionService + ExoPlayer: background, notification, headset keys,
+│          history/skip reporting, server prefetch, endless «Моя волна», skip on error),
+│          PlayerConnection (MediaController → StateFlow<PlayerState> for UI),
+│          AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
+└─ ui/     MusicRoot (theme from artwork, Nav3 tabs, mini/full player, snackbars), MainViewModel (TrackActions, PlayerControls),
+           auth/ home/ search/ library/ settings/ player/ common/ theme/
 ```
 
-Unidirectional data flow: ViewModel exposes `StateFlow<UiState>`, UI collects with
-`collectAsStateWithLifecycle()`. Playback state lives in the service. UI talks to it through `MediaController`.
+Unidirectional data flow: ViewModel exposes `StateFlow`, UI collects with `collectAsStateWithLifecycle()`.
+The UI talks to the player only through `PlayerConnection`. It connects in MainActivity.onStart and releases
+in onStop; playback continues in the service. Track rows get actions and marks through `LocalTrackActions` and
+`LocalTrackMarks`.
+
+### Audio storage (how space is saved)
+
+- **One cache for everything** (`noBackupFilesDir/audio`): Android does not clear it on its own, it is excluded
+  from backup, and it is removed with the app. Listened tracks and downloads share it, so nothing is stored twice.
+- **PinnedLruEvictor**: above the user limit (128 MB to 2 GB, default 256 MB), listened tracks are evicted
+  least recently played first. Downloads are *pinned*: they are never evicted and do not count toward the limit.
+  Nothing is evicted until the pin list (from the DownloadIndex) and the limit are loaded, so downloads cannot be
+  wiped while SimpleCache loads from disk. Unit tests: `src/test/.../PinnedLruEvictorTest.kt`.
+- **Download quality** (default «Экономно»): `?q=o64` makes the server transcode to Opus 64 kbit/s, about half the size
+  of the AAC 128 original. Cache keys: `id` for the original stream, `id@o64`/`id@o96` for compact copies.
+  When a compact download finishes, the original is dropped from the listening cache.
+- **Playback resolves downloads**: the player always gets the plain stream URL. When the track is downloaded,
+  a `ResolvingDataSource` swaps in the downloaded copy's key and URI, so downloaded tracks play offline.
+- Artwork has its own Coil disk cache capped at 64 MB (`cacheDir/artwork`).
+
+Verified on the emulator:
+- background playback after swiping the task away (FGS type mediaPlayback);
+- notification and lock-screen controls, and media keys;
+- download with a progress notification;
+- offline playback of a downloaded track to its end;
+- downloads and cache survive process death;
+- «Очистить кэш» keeps downloads;
+- release build (R8): login, playback and download.
+
+### Known gaps / next steps
+
+- Queue and position are not restored after process death (needs Media3 `onPlaybackResumption` plus a persisted queue).
+- Equalizer.
+- Lyrics.
+- Artist and album pages.
+- Playlists.
+- Android Auto (MediaLibraryService).
+- Glance widget.
+- Baseline profile.
+- Move Slider to the SliderState overload (deprecation warning).
 
 ## Product scope (parity with the website + native extras)
 

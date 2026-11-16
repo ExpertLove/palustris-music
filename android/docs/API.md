@@ -2,6 +2,8 @@
 
 Base URL: `https://music.palustris.ru`. Auth: `Authorization: Bearer <token>` (token from `/api/login` / `/api/register` JSON body); cookie `music_s` is the web fallback. `/api/stream/{id}` also accepts Bearer, supports `Range` (206).
 
+**`/api/stream/{id}?q=o64|o96`** — compact Opus copy (Ogg) for downloads: ffmpeg transcodes the cached original once, then it is served as a file with `Content-Length` and Range. ~2× smaller than the AAC 128 original. First request for a track can take ~5–10 s. Query `a`/`t` (artist/title) let the server find a replacement if the video is gone.
+
 | Route | Methods → handler | Params | Returns | Doc |
 |---|---|---|---|---|
 | `/api/health` | GET `health` | `` | `&'static str` |  |
@@ -135,6 +137,7 @@ struct LyricsQ {
 struct StreamQ {
     a: Option<String>,
     t: Option<String>,
+    q: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +202,56 @@ struct OrderBody {
 ```
 
 ## Structs from other modules
+
+### accounts.rs
+```rust
+#[derive(Serialize)]
+pub struct AccountInfo {
+    pub id: i64,
+    pub label: String,
+    pub enabled: bool,
+    /// ok | new | cooldown | dead | off
+    pub status: String,
+    pub note: Option<String>,
+    pub created: i64,
+    pub updated: i64,
+    #[serde(rename = "lastUsed")]
+    pub last_used: i64,
+    #[serde(rename = "lastOk")]
+    pub last_ok: i64,
+    #[serde(rename = "lastErr")]
+    pub last_err: i64,
+    #[serde(rename = "cooldownUntil")]
+    pub cooldown_until: i64,
+    #[serde(rename = "okCount")]
+    pub ok_count: i64,
+    #[serde(rename = "errCount")]
+    pub err_count: i64,
+    /// Удачных загрузок за последний час — чтобы видеть нагрузку на аккаунт.
+    #[serde(rename = "hourOk")]
+    pub hour_ok: i64,
+    /// Сколько cookies в файле и есть ли среди них cookies входа.
+    pub cookies: usize,
+    #[serde(rename = "loggedIn")]
+    pub logged_in: bool,
+}
+
+#[derive(Serialize)]
+pub struct Event {
+    pub id: i64,
+    pub at: i64,
+    pub video: String,
+    pub title: Option<String>,
+    pub account: Option<i64>,
+    #[serde(rename = "accountLabel")]
+    pub account_label: Option<String>,
+    pub client: String,
+    pub ok: bool,
+    pub kind: Option<String>,
+    pub err: Option<String>,
+    pub ms: i64,
+}
+```
 
 ### db.rs
 ```rust
