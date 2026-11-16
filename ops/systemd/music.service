@@ -1,0 +1,19 @@
+[Unit]
+Description=Music player (web)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/music
+Environment=MUSIC_DATA=/var/lib/music
+Environment=MUSIC_CACHE=/var/lib/music/cache
+Environment=MUSIC_WEB=/opt/music/web
+Environment=MUSIC_ADDR=127.0.0.1:8030
+Environment=MUSIC_YTDLP=/opt/yt-dlp/bin/yt-dlp
+ExecStart=/opt/music/bin/music
+Restart=always
+RestartSec=2
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target

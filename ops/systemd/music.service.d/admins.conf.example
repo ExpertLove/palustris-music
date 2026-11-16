@@ -1,0 +1,5 @@
+# Скопировать в /etc/systemd/system/music.service.d/admins.conf.
+# Почты администраторов через запятую. Только УЖЕ зарегистрированные на сайте адреса:
+# подтверждение почты при входе не требуется, и свободный адрес может занять кто угодно.
+[Service]
+Environment=MUSIC_ADMINS=admin@example.com,second-admin@example.com

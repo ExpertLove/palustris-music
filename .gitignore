@@ -3,3 +3,24 @@ dist/
 target/
 *.log
 .env
+.env.*
+
+# локальная база и данные бэкенда
+server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# секреты — никогда в git
+*.jks
+*.keystore
+keystore.properties
+cookies*.txt
+*.pem
+id_ed25519*
+
+# редакторы и ОС
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

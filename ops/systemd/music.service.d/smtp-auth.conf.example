@@ -1,0 +1,5 @@
+# Скопировать в /etc/systemd/system/music.service.d/smtp-auth.conf, права 600.
+# Настоящий пароль хранится ТОЛЬКО на сервере (учётка noreply в pmail), в git его нет.
+[Service]
+Environment=MUSIC_SMTP_USER=noreply
+Environment=MUSIC_SMTP_PASS=<пароль учётки noreply в pmail>

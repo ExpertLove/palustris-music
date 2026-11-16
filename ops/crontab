@@ -1,0 +1,4 @@
+# Строки из `crontab -l` root на сервере, относящиеся к «Музыке».
+# Скрипты: ops/yt-dlp-update.sh → /usr/local/bin/music-ytdlp-update, ops/music-db-backup.sh → /usr/local/bin/music-db-backup
+15 4 * * * /usr/local/bin/music-ytdlp-update >> /var/log/music-ytdlp.log 2>&1
+25 4 * * * /usr/local/bin/music-db-backup >> /var/log/music-backup.log 2>&1
