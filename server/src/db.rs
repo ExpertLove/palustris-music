@@ -46,6 +46,8 @@ pub fn open(path: &Path) -> anyhow::Result<Connection> {
     let c = Connection::open(path)?;
     c.pragma_update(None, "journal_mode", "WAL")?;
     c.pragma_update(None, "foreign_keys", "ON")?;
+    // Базу открывают два соединения (основное и аккаунтов YouTube) — ждём блокировку, а не падаем.
+    c.busy_timeout(std::time::Duration::from_secs(5))?;
     c.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS users(
@@ -144,6 +146,35 @@ pub fn open(path: &Path) -> anyhow::Result<Connection> {
             found INTEGER NOT NULL DEFAULT 0,
             fetched INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS yt_accounts(
+            id INTEGER PRIMARY KEY,
+            label TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'new',
+            note TEXT,
+            created INTEGER NOT NULL,
+            updated INTEGER NOT NULL,
+            last_used INTEGER NOT NULL DEFAULT 0,
+            last_ok INTEGER NOT NULL DEFAULT 0,
+            last_err INTEGER NOT NULL DEFAULT 0,
+            cooldown_until INTEGER NOT NULL DEFAULT 0,
+            ok_count INTEGER NOT NULL DEFAULT 0,
+            err_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS dl_events(
+            id INTEGER PRIMARY KEY,
+            at INTEGER NOT NULL,
+            video TEXT NOT NULL,
+            account INTEGER,
+            client TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            kind TEXT,
+            err TEXT,
+            ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS dl_events_at ON dl_events(at);
+        CREATE INDEX IF NOT EXISTS dl_events_video ON dl_events(video);
+        CREATE INDEX IF NOT EXISTS history_track ON history(track_id);
         "#,
     )?;
     Ok(c)

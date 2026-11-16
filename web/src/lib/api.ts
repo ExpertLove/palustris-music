@@ -1,5 +1,9 @@
 import type {
+  AccountTest,
+  AdminOverview,
+  AdminUser,
   ArtistPage,
+  DlEvent,
   Collection,
   HistItem,
   LibraryArtist,
@@ -10,6 +14,7 @@ import type {
   SearchAll,
   SharedPlaylist,
   Track,
+  YtAccount,
 } from './types'
 
 const TOKEN_KEY = 'music.token'
@@ -129,6 +134,23 @@ export const api = {
   sharePlaylist: (id: number) => post<{ share: string }>(`/playlists/${id}/share`),
   unsharePlaylist: (id: number) => del<null>(`/playlists/${id}/share`),
   shared: (slug: string) => get<SharedPlaylist>(`/shared/${encodeURIComponent(slug)}`),
+}
+
+export const adminApi = {
+  overview: () => get<AdminOverview>('/admin/overview'),
+  accounts: () => get<YtAccount[]>('/admin/accounts'),
+  addAccount: (label: string, cookies: string) => post<{ id: number; cookies: number }>('/admin/accounts', { label, cookies }),
+  replaceCookies: (id: number, cookies: string) =>
+    req<{ cookies: number }>(`/admin/accounts/${id}/cookies`, { method: 'PUT', json: { cookies } }),
+  patchAccount: (id: number, b: { label?: string; enabled?: boolean; reset?: boolean }) =>
+    req<null>(`/admin/accounts/${id}`, { method: 'PATCH', json: b }),
+  deleteAccount: (id: number) => del<null>(`/admin/accounts/${id}`),
+  testAccount: (id: number) => post<AccountTest>(`/admin/accounts/${id}/test`),
+  events: (p: { limit?: number; fail?: boolean; video?: string }) =>
+    get<DlEvent[]>(`/admin/events?${q({ limit: p.limit, fail: p.fail ? 1 : undefined, video: p.video })}`),
+  logs: (p: { src: string; lines: number; q?: string }) =>
+    get<{ src: string; lines: string[]; error?: string }>(`/admin/logs?${q(p)}`),
+  users: () => get<AdminUser[]>('/admin/users'),
 }
 
 /** На сервер уходят только поля трека, которые он хранит. */

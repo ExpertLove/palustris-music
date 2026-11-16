@@ -1,3 +1,5 @@
+mod accounts;
+mod admin;
 mod audio;
 mod compact;
 mod db;
@@ -35,6 +37,12 @@ struct AppState {
     alt: Mutex<std::collections::HashMap<String, String>>,
     /// Недавно не получившиеся треки: чтобы не долбить YouTube на каждый Range-запрос.
     failed: Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    /// Аккаунты YouTube и журнал загрузок.
+    accounts: Arc<accounts::Accounts>,
+    /// Почты администраторов (MUSIC_ADMINS), в нижнем регистре.
+    admins: Vec<String>,
+    data: std::path::PathBuf,
+    started: i64,
 }
 
 type St = State<Arc<AppState>>;
@@ -345,7 +353,9 @@ async fn me(State(st): St, h: HeaderMap) -> Result<Response, ApiError> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .map_err(e500)?;
+    let admin = admin::is_admin(&st, &email);
     let body = serde_json::json!({
+        "admin": admin,
         "email": email,
         "name": name,
         "genres": genres,
@@ -1324,6 +1334,7 @@ fn spawn_maintenance(st: Arc<AppState>) {
                 let _ = db.execute("DELETE FROM email_tokens WHERE expires < ?1", [now - 7 * 86400]);
                 let _ = db.execute("DELETE FROM skips WHERE at < ?1", [now - 90 * 86400]);
             }
+            st.accounts.prune();
             tokio::time::sleep(std::time::Duration::from_secs(1800)).await;
         }
     });
@@ -1339,7 +1350,15 @@ async fn main() -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&data)?;
     std::fs::create_dir_all(&cache_dir)?;
-    let conn = db::open(&std::path::Path::new(&data).join("music.db"))?;
+    let db_path = std::path::Path::new(&data).join("music.db");
+    let conn = db::open(&db_path)?;
+    let accounts = Arc::new(accounts::Accounts::new(db::open(&db_path)?, std::path::Path::new(&data).join("ytaccounts"))?);
+    let admins: Vec<String> = std::env::var("MUSIC_ADMINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     let state = Arc::new(AppState {
         db: Mutex::new(conn),
@@ -1349,11 +1368,15 @@ async fn main() -> anyhow::Result<()> {
             .build()?,
         cache: yt::SearchCache::default(),
         top: Mutex::new(std::collections::HashMap::new()),
-        audio: audio::Audio::new(cache_dir, ytdlp),
+        audio: audio::Audio::new(cache_dir, ytdlp, accounts.clone()),
         mail: mail::Mailer::from_env(),
         attempts: Mutex::new(std::collections::HashMap::new()),
         alt: Mutex::new(std::collections::HashMap::new()),
         failed: Mutex::new(std::collections::HashMap::new()),
+        accounts,
+        admins,
+        data: std::path::PathBuf::from(&data),
+        started: recs::now(),
     });
     spawn_maintenance(state.clone());
 
@@ -1398,6 +1421,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/playlists/{id}/items", post(add_to_playlist))
         .route("/api/playlists/{id}/items/{track}", delete(remove_from_playlist))
         .route("/api/shared/{slug}", get(shared_playlist))
+        .route("/api/admin/overview", get(admin::overview))
+        .route("/api/admin/accounts", get(admin::accounts_list).post(admin::accounts_add))
+        .route("/api/admin/accounts/{id}", axum::routing::patch(admin::accounts_patch).delete(admin::accounts_delete))
+        .route("/api/admin/accounts/{id}/cookies", axum::routing::put(admin::accounts_cookies))
+        .route("/api/admin/accounts/{id}/test", post(admin::accounts_test))
+        .route("/api/admin/events", get(admin::events))
+        .route("/api/admin/logs", get(admin::logs))
+        .route("/api/admin/users", get(admin::users))
         .fallback_service(spa)
         .layer(CompressionLayer::new().compress_when(compress))
         .with_state(state);

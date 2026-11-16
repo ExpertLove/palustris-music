@@ -17,6 +17,7 @@ export interface HistItem extends Track {
 }
 
 export interface Profile {
+  admin?: boolean
   email: string
   name: string
   genres: string[]
@@ -112,4 +113,81 @@ export interface SharedPlaylist {
   owner: string
   share: string
   items: Track[]
+}
+
+// ───────── админка ─────────
+
+export interface AdminOverview {
+  now: number
+  startedAt: number
+  ipFlaggedUntil: number
+  accounts: { total: number; available: number }
+  hour: { ok: number; fail: number; attemptsFailed: number }
+  day: { ok: number; fail: number; attemptsFailed: number }
+  lastError: { at: number; err: string } | null
+  cache: { files: number; bytes: number; maxBytes: number }
+  users: number
+  activeUsers: number
+  playsDay: number
+  ytdlp: string
+  disk: { size: number; avail: number } | null
+}
+
+export type YtAccountStatus = 'ok' | 'new' | 'cooldown' | 'dead' | 'off'
+
+export interface YtAccount {
+  id: number
+  label: string
+  enabled: boolean
+  status: YtAccountStatus
+  note: string | null
+  created: number
+  updated: number
+  lastUsed: number
+  lastOk: number
+  lastErr: number
+  cooldownUntil: number
+  okCount: number
+  errCount: number
+  hourOk: number
+  cookies: number
+  loggedIn: boolean
+}
+
+export interface AccountTest {
+  ok: boolean
+  loggedIn: boolean | null
+  format?: string
+  error?: string
+  kind?: string
+  ms: number
+}
+
+export interface DlEvent {
+  id: number
+  at: number
+  video: string
+  title: string | null
+  account: number | null
+  accountLabel: string | null
+  client: string
+  ok: boolean
+  kind: string | null
+  err: string | null
+  ms: number
+}
+
+export interface AdminUser {
+  id: number
+  admin: boolean
+  email: string
+  name: string
+  created: number
+  verified: boolean
+  lastSeen: number
+  sessions: number
+  plays: number
+  likes: number
+  playlists: number
+  lastPlay: number
 }

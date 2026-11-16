@@ -13,6 +13,8 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio::sync::{Notify, Semaphore};
 
+use crate::accounts;
+
 pub const EXTS: [&str; 4] = ["m4a", "webm", "opus", "mp3"];
 
 #[derive(Clone, Default, Debug)]
@@ -57,9 +59,19 @@ impl Job {
     }
 }
 
+enum Step {
+    Done(PathBuf),
+    /// Дальше пробовать бессмысленно.
+    Stop,
+    Next,
+}
+
 pub struct Audio {
     pub dir: PathBuf,
     pub ytdlp: String,
+    pub accounts: Arc<crate::accounts::Accounts>,
+    /// `--extractor-args` для попыток с аккаунтом (MUSIC_ACCOUNT_CLIENTS), по умолчанию — выбор yt-dlp.
+    account_clients: Option<String>,
     jobs: Mutex<HashMap<String, Arc<Job>>>,
     play_slots: Semaphore,
     prefetch_slots: Semaphore,
@@ -85,10 +97,16 @@ fn mime(ext: &str) -> &'static str {
 }
 
 impl Audio {
-    pub fn new(dir: PathBuf, ytdlp: String) -> Arc<Self> {
+    pub fn new(dir: PathBuf, ytdlp: String, accounts: Arc<crate::accounts::Accounts>) -> Arc<Self> {
+        let account_clients = std::env::var("MUSIC_ACCOUNT_CLIENTS")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| format!("youtube:player_client={}", v.trim()));
         Arc::new(Audio {
             dir,
             ytdlp,
+            accounts,
+            account_clients,
             jobs: Mutex::new(HashMap::new()),
             play_slots: Semaphore::new(3),
             prefetch_slots: Semaphore::new(1),
@@ -148,95 +166,184 @@ impl Audio {
             return Ok(p);
         }
         tokio::fs::create_dir_all(&self.dir).await?;
-        let cookies = std::env::var("MUSIC_COOKIES").unwrap_or_default();
-        let use_cookies = !cookies.is_empty() && Path::new(&cookies).exists();
+        let acc = &self.accounts;
+        let mut last = String::new();
+
+        // 1. Без аккаунта — если IP сервера сейчас не под подозрением или аккаунтов нет.
+        //    Получили «not a bot» — помечаем IP и сразу идём к аккаунтам.
+        let mut anon_done = false;
+        let flagged = acc.ip_flagged();
+        if !flagged || !acc.any_available() {
+            // IP уже помечен, а аккаунтов нет: все пять способов почти наверняка упадут,
+            // а лишние запросы только продлевают блок. Пробуем два: быстрый и с PO-токеном.
+            match self.anon_attempts(id, job, &mut last, flagged).await {
+                Step::Done(p) => return Ok(p),
+                Step::Stop => anyhow::bail!("yt-dlp: {last}"),
+                Step::Next => {}
+            }
+            anon_done = true;
+        }
+
+        // 2. Аккаунты YouTube по очереди, не больше трёх на трек.
+        let mut tried: Vec<i64> = Vec::new();
+        while tried.len() < 3 {
+            let Some((acc_id, path)) = acc.pick(&tried) else { break };
+            tried.push(acc_id);
+            let extractor = self.account_clients.as_deref();
+            let client = format!("acc:{}", extractor.unwrap_or("default"));
+            let url = format!("https://music.youtube.com/watch?v={id}");
+            let started = Instant::now();
+            match self.attempt(id, job, &url, extractor, Some(&path)).await {
+                Ok(p) => {
+                    acc.report_ok(acc_id);
+                    acc.log_event(id, Some(acc_id), &client, Ok(()), started.elapsed().as_millis() as i64);
+                    return Ok(p);
+                }
+                Err((err, announced)) => {
+                    let kind = accounts::classify(&err);
+                    acc.report_err(acc_id, kind, &err);
+                    acc.log_event(id, Some(acc_id), &client, Err((&err, kind)), started.elapsed().as_millis() as i64);
+                    eprintln!("yt-dlp account #{acc_id} for {id} failed: {err}");
+                    last = err;
+                    if announced || kind == accounts::ErrKind::Video {
+                        anyhow::bail!("yt-dlp: {last}");
+                    }
+                }
+            }
+        }
+
+        // 3. IP был под подозрением, а аккаунты не помогли — пробуем без них: вдруг блок уже сняли.
+        if !anon_done {
+            if let Step::Done(p) = self.anon_attempts(id, job, &mut last, true).await {
+                return Ok(p);
+            }
+        }
+        anyhow::bail!("yt-dlp: {last}")
+    }
+
+    /// Попытки без cookies. `Next` — стоит попробовать аккаунты.
+    async fn anon_attempts(&self, id: &str, job: &Job, last: &mut String, quick: bool) -> Step {
         // visionos отдаёт тот же формат 140 без «рекламной» паузы в 5–6 с, которую YouTube требует
         // от tv-клиентов по умолчанию: старт ~1,5 с вместо ~9 с. Дальше — запасные пути,
         // последние два — с PO-токеном от bgutil-provider (127.0.0.1:4416).
-        let sources: [(String, Option<&str>); 5] = [
-            (format!("https://music.youtube.com/watch?v={id}"), Some("youtube:player_client=visionos")),
-            (format!("https://music.youtube.com/watch?v={id}"), None),
-            (format!("https://www.youtube.com/watch?v={id}"), None),
-            (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=tv_simply")),
-            (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=mweb")),
+        let sources: [(String, Option<&str>, &str); 5] = [
+            (format!("https://music.youtube.com/watch?v={id}"), Some("youtube:player_client=visionos"), "visionos"),
+            (format!("https://music.youtube.com/watch?v={id}"), None, "music"),
+            (format!("https://www.youtube.com/watch?v={id}"), None, "web"),
+            (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=tv_simply"), "tv_simply"),
+            (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=mweb"), "mweb"),
         ];
-        let mut last = String::new();
-        for (i, (url, extractor)) in sources.iter().enumerate() {
-            if i > 1 {
+        let acc = &self.accounts;
+        for (i, (url, extractor, client)) in sources.iter().enumerate() {
+            if quick && i != 0 && i != 4 {
+                continue;
+            }
+            if i > 1 && !quick {
                 tokio::time::sleep(Duration::from_millis(400 * i as u64)).await;
             }
-            let mut cmd = tokio::process::Command::new(&self.ytdlp);
-            cmd.args([
-                "-f",
-                "bestaudio[ext=m4a]/bestaudio",
-                "--no-playlist",
-                "--no-warnings",
-                "--no-simulate",
-                "--fixup",
-                "never",
-                "--socket-timeout",
-                "15",
-                "--retries",
-                "3",
-                "--print",
-                "before_dl:%(filesize)s %(ext)s",
-            ]);
-            if use_cookies {
-                cmd.args(["--cookies", &cookies]);
-            }
-            if let Some(e) = extractor {
-                cmd.args(["--extractor-args", e]);
-            }
-            cmd.arg("-o")
-                .arg(self.dir.join(format!("{id}.%(ext)s")).to_string_lossy().to_string())
-                .arg(url)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            let mut child = cmd.spawn()?;
-            let stderr = child.stderr.take();
-            let err_task = tokio::spawn(async move {
-                let mut s = String::new();
-                if let Some(mut e) = stderr {
-                    let _ = e.read_to_string(&mut s).await;
+            let started = Instant::now();
+            match self.attempt(id, job, url, *extractor, None).await {
+                Ok(p) => {
+                    acc.unflag_ip();
+                    acc.log_event(id, None, client, Ok(()), started.elapsed().as_millis() as i64);
+                    return Step::Done(p);
                 }
-                s
-            });
-            let mut announced = false;
-            if let Some(out) = child.stdout.take() {
-                let mut lines = BufReader::new(out).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let mut it = line.split_whitespace();
-                    let (Some(size), Some(ext)) = (it.next(), it.next()) else { continue };
-                    if let Ok(size) = size.parse::<u64>() {
-                        if size > 0 && !announced {
-                            announced = true;
-                            let part = self.dir.join(format!("{id}.{ext}.part"));
-                            let ext = ext.to_string();
-                            job.update(|s| {
-                                s.size = Some(size);
-                                s.part = Some(part);
-                                s.ext = ext;
-                            });
+                Err((err, announced)) => {
+                    let kind = accounts::classify(&err);
+                    acc.log_event(id, None, client, Err((&err, kind)), started.elapsed().as_millis() as i64);
+                    eprintln!("yt-dlp attempt {} for {id} failed: {err}", i + 1);
+                    *last = err;
+                    if announced {
+                        // Клиент уже получает байты этой попытки — переключаться на другую нельзя.
+                        return Step::Stop;
+                    }
+                    if kind == accounts::ErrKind::Bot {
+                        acc.flag_ip();
+                        if acc.any_available() {
+                            return Step::Next;
                         }
                     }
                 }
             }
-            let status = child.wait().await?;
-            let err = err_task.await.unwrap_or_default();
-            if status.success() {
-                if let Some(p) = self.cached(id) {
-                    return Ok(p);
+        }
+        Step::Next
+    }
+
+    /// Один запуск yt-dlp. Ошибка — (последняя строка stderr, начал ли клиент получать байты).
+    async fn attempt(&self, id: &str, job: &Job, url: &str, extractor: Option<&str>, cookies: Option<&Path>) -> Result<PathBuf, (String, bool)> {
+        let mut cmd = tokio::process::Command::new(&self.ytdlp);
+        cmd.args([
+            "-f",
+            "bestaudio[ext=m4a]/bestaudio",
+            "--no-playlist",
+            "--no-warnings",
+            "--no-simulate",
+            "--fixup",
+            "never",
+            "--socket-timeout",
+            "15",
+            "--retries",
+            "3",
+            "--print",
+            "before_dl:%(filesize)s %(ext)s",
+        ]);
+        if let Some(c) = cookies {
+            cmd.arg("--cookies").arg(c);
+        }
+        if let Some(e) = extractor {
+            cmd.args(["--extractor-args", e]);
+        }
+        cmd.arg("-o")
+            .arg(self.dir.join(format!("{id}.%(ext)s")).to_string_lossy().to_string())
+            .arg(url)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| (format!("не запустился yt-dlp: {e}"), false))?;
+        let stderr = child.stderr.take();
+        let err_task = tokio::spawn(async move {
+            let mut s = String::new();
+            if let Some(mut e) = stderr {
+                let _ = e.read_to_string(&mut s).await;
+            }
+            s
+        });
+        let mut announced = false;
+        if let Some(out) = child.stdout.take() {
+            let mut lines = BufReader::new(out).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let mut it = line.split_whitespace();
+                let (Some(size), Some(ext)) = (it.next(), it.next()) else { continue };
+                if let Ok(size) = size.parse::<u64>() {
+                    if size > 0 && !announced {
+                        announced = true;
+                        let part = self.dir.join(format!("{id}.{ext}.part"));
+                        let ext = ext.to_string();
+                        job.update(|s| {
+                            s.size = Some(size);
+                            s.part = Some(part);
+                            s.ext = ext;
+                        });
+                    }
                 }
             }
-            last = err.trim().lines().last().unwrap_or("yt-dlp failed").to_string();
-            eprintln!("yt-dlp attempt {} for {id} failed: {last}", i + 1);
-            if announced {
-                // Клиент уже получает байты этой попытки — переключаться на другую нельзя.
-                break;
+        }
+        let status = child.wait().await.map_err(|e| (e.to_string(), announced))?;
+        let err = err_task.await.unwrap_or_default();
+        if status.success() {
+            if let Some(p) = self.cached(id) {
+                return Ok(p);
             }
         }
-        anyhow::bail!("yt-dlp: {last}")
+        let last = err
+            .trim()
+            .lines()
+            .filter(|l| l.contains("ERROR"))
+            .last()
+            .or_else(|| err.trim().lines().last())
+            .unwrap_or("yt-dlp failed")
+            .to_string();
+        Err((last, announced))
     }
 
     /// Ждём, пока можно отвечать: файл готов, известен размер или всё сломалось.

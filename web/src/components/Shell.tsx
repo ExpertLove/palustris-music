@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Heart, House, Library, Plus, Search, UserRound } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Gauge, Heart, House, Library, Plus, Search, UserRound } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
 import { initials } from '../lib/format'
@@ -39,6 +39,12 @@ export function Sidebar() {
             <span>{label}</span>
           </Link>
         ))}
+        {me?.admin && (
+          <Link href="/admin" className={`side-link ${isActive(loc, '/admin') ? 'active' : ''}`} aria-current={isActive(loc, '/admin') ? 'page' : undefined} title="Админка">
+            <Gauge size={21} />
+            <span>Админка</span>
+          </Link>
+        )}
       </div>
       <div className="side-sep" />
       <div className="side-head">

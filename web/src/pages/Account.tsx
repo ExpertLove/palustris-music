@@ -1,4 +1,4 @@
-import { Keyboard, LogOut, MailCheck, MailWarning, Shield, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { Gauge, Keyboard, LogOut, MailCheck, MailWarning, Shield, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'wouter'
 import { Dialog } from '../components/Overlays'
@@ -124,6 +124,16 @@ export default function Account() {
               </button>
             </div>
           </section>
+
+          {me.admin && (
+            <section className="acc-card">
+              <h2>Администрирование</h2>
+              <p>Аккаунты YouTube для загрузки треков, журнал загрузок, логи сервера и пользователи.</p>
+              <Link href="/admin" className="btn btn-primary">
+                <Gauge size={18} /> Открыть админку
+              </Link>
+            </section>
+          )}
 
           <section className="acc-card">
             <h2>Звук и управление</h2>

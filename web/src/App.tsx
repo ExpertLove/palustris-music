@@ -16,6 +16,7 @@ import { Forgot, Login, Register, Reset } from './pages/Auth'
 import Legal from './pages/Legal'
 
 const Account = lazy(() => import('./pages/Account'))
+const Admin = lazy(() => import('./pages/Admin'))
 const Landing = lazy(() => import('./pages/Landing'))
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '')
@@ -79,6 +80,7 @@ function UserRoutes() {
         <Route path="/mood/:id" component={MoodPage} />
         <Route path="/top" component={TopPage} />
         <Route path="/account" component={Account} />
+        <Route path="/admin" component={Admin} />
         <Route path="/s/:slug" component={SharedPage} />
         <Route path="/login">
           <Redirect to="/" replace />
