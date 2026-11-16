@@ -295,3 +295,13 @@
 .quick .trow .n, .quick .trow .like, .quick .trow .dur { display: none; }
 .quick.chart .trow { --cols: 26px 48px minmax(0, 1fr) 36px; }
 .quick.chart .trow .n { display: grid; }
+
+@media (max-width: 760px) {
+  .eq-graph { height: 200px; }
+  .eq-row .lbl { width: auto; flex: none; }
+  .setting { flex-wrap: wrap; gap: 10px 16px; }
+  .setting .txt { flex: 1 1 60%; }
+  .setting .seg { width: 100%; justify-content: space-between; }
+  .setting .seg button { flex: 1; padding: 0 8px; }
+  .eq-presets { margin: 0 -20px; padding: 2px 20px; }
+}
