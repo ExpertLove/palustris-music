@@ -236,7 +236,8 @@ impl Candidates {
                     continue;
                 }
             }
-            if head.contains(&a) || is_junk(&t.title) || a.is_empty() {
+            // Часовые миксы и сборники в волне не нужны: дольше 12 минут — не песня.
+            if head.contains(&a) || is_junk(&t.title) || a.is_empty() || t.duration > 720 {
                 continue;
             }
             let key = format!("{a}\u{1}{}", norm_title(&t.title));
@@ -317,6 +318,17 @@ fn is_junk(title: &str) -> bool {
         "music 20",
         "chill mix",
         "relaxing",
+        "dj mix",
+        "in the mix",
+        "continuous mix",
+        "continuous dj",
+        "nonstop",
+        "non stop",
+        "hits mix",
+        "mix 20",
+        "mashup mix",
+        "микс 20",
+        "music mix",
     ];
     let t = title.to_lowercase();
     if t.matches(',').count() >= 3 {
@@ -400,6 +412,7 @@ mod tests {
         assert!(is_junk("Top 100 Songs 2026"));
         assert!(is_junk("Лучшие песни всех времён"));
         assert!(is_junk("Chill mix 1 hour"));
+        assert!(is_junk("Electronic Dance Music Hits in the Mix (Continuous DJ Mix)"));
         assert!(!is_junk("Blinding Lights"));
         assert!(!is_junk("Rutba (From \"Kali Jotta\")"));
     }
