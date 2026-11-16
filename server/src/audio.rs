@@ -42,6 +42,19 @@ impl Job {
     async fn wait(&self) {
         let _ = tokio::time::timeout(Duration::from_millis(150), self.notify.notified()).await;
     }
+    /// Дождаться конца загрузки: путь к готовому файлу или ошибка.
+    pub async fn finished(&self, limit: Duration) -> Result<PathBuf, String> {
+        let started = Instant::now();
+        loop {
+            if let Some(done) = self.state().done {
+                return done;
+            }
+            if started.elapsed() > limit {
+                return Err("timeout".into());
+            }
+            self.wait().await;
+        }
+    }
 }
 
 pub struct Audio {

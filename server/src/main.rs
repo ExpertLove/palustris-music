@@ -1,4 +1,5 @@
 mod audio;
+mod compact;
 mod db;
 mod lyrics;
 mod mail;
@@ -701,6 +702,7 @@ async fn lyrics_handler(State(st): St, h: HeaderMap, Query(q): Query<LyricsQ>) -
 struct StreamQ {
     a: Option<String>,
     t: Option<String>,
+    q: Option<String>,
 }
 
 /// «Blinding Lights (Official Video)» → «blinding lights».
@@ -768,19 +770,60 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
     if !audio::valid_id(&id) {
         return (StatusCode::BAD_REQUEST, "bad id").into_response();
     }
+    // `?q=o64|o96` — компактная копия в Opus для скачивания в приложение.
+    let kbps = match compact::parse(q.q.as_deref()) {
+        Ok(k) => k,
+        Err(()) => return (StatusCode::BAD_REQUEST, "bad q").into_response(),
+    };
+    if let Some(k) = kbps {
+        if let Some(p) = compact::existing(&st.audio.dir, &id, k) {
+            return serve_file(p, req).await;
+        }
+    }
+    let ready = match resolve_audio(&st, &id, &q).await {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let Some(k) = kbps else {
+        return match ready {
+            audio::Ready::Progressive(job) => audio::serve_progressive(job, req.headers()).await,
+            audio::Ready::File(p) => serve_file(p, req).await,
+            audio::Ready::Failed(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        };
+    };
+    let src = match ready {
+        audio::Ready::File(p) => p,
+        audio::Ready::Progressive(job) => match job.finished(std::time::Duration::from_secs(300)).await {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::BAD_GATEWAY, format!("не удалось получить аудио: {e}")).into_response(),
+        },
+        audio::Ready::Failed(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+    };
+    match compact::make(&st.audio.dir, &src, &id, k).await {
+        Ok(p) => serve_file(p, req).await,
+        Err(e) => {
+            eprintln!("compact {id}@{k}: {e}");
+            (StatusCode::BAD_GATEWAY, "не удалось подготовить компактную версию").into_response()
+        }
+    }
+}
+
+/// Файл трека или идущая загрузка; при неудаче ищем замену по исполнителю и названию.
+async fn resolve_audio(st: &Arc<AppState>, id: &str, q: &StreamQ) -> Result<audio::Ready, Response> {
+    let id = id.to_string();
     if let Some(p) = st.audio.cached(&id) {
-        return serve_file(p, req).await;
+        return Ok(audio::Ready::File(p));
     }
     let known_alt = st.alt.lock().ok().and_then(|m| m.get(&id).cloned());
     if let Some(alt) = &known_alt {
         if let Some(p) = st.audio.cached(alt) {
-            return serve_file(p, req).await;
+            return Ok(audio::Ready::File(p));
         }
     }
     // Недавняя неудача — отвечаем сразу, чтобы плеер переключился, а не ждал.
     if let Ok(m) = st.failed.lock() {
         if m.get(&id).map(|at| at.elapsed() < std::time::Duration::from_secs(600)).unwrap_or(false) {
-            return (StatusCode::BAD_GATEWAY, "трек временно недоступен").into_response();
+            return Err((StatusCode::BAD_GATEWAY, "трек временно недоступен").into_response());
         }
     }
 
@@ -798,7 +841,7 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
                         m.insert(id.clone(), cid.clone());
                     }
                 }
-                return serve_file(p, req).await;
+                return Ok(audio::Ready::File(p));
             }
             audio::Ready::Progressive(job) => {
                 if cid != id {
@@ -807,7 +850,7 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
                         m.insert(id.clone(), cid.clone());
                     }
                 }
-                return audio::serve_progressive(job, req.headers()).await;
+                return Ok(audio::Ready::Progressive(job));
             }
             audio::Ready::Failed(e) => last = e,
         }
@@ -815,7 +858,7 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
             searched = true;
             let artist = q.a.clone().unwrap_or_default();
             let title = q.t.clone().unwrap_or_default();
-            candidates.extend(alternatives(&st, &id, &artist, &title).await);
+            candidates.extend(alternatives(st, &id, &artist, &title).await);
         }
     }
 
@@ -827,7 +870,7 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
         m.insert(id.clone(), std::time::Instant::now());
     }
     eprintln!("stream {id}: {last}");
-    (StatusCode::BAD_GATEWAY, format!("не удалось получить аудио: {last}")).into_response()
+    Err((StatusCode::BAD_GATEWAY, format!("не удалось получить аудио: {last}")).into_response())
 }
 
 #[derive(Deserialize)]
