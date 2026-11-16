@@ -514,6 +514,8 @@ pub async fn recommend(
         }
     }
 
+    // Те же правила, что у волны: без сборников, часовых миксов и каналов-агрегаторов.
+    scored.retain(|(_, t)| !is_junk(&t.title) && t.duration <= 720);
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.into_iter().take(40).map(|(_, t)| t).collect()
 }

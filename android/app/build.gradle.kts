@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
@@ -7,8 +9,26 @@ plugins {
   alias(libs.plugins.room)
 }
 
+// Release signing is read from android/keystore.properties (git-ignored). Without it,
+// assembleRelease still works but produces an unsigned APK.
+val keystoreProps = Properties().apply {
+  val f = rootProject.file("keystore.properties")
+  if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
   namespace = "ru.palustris.music"
+
+  signingConfigs {
+    if (keystoreProps.getProperty("storeFile") != null) {
+      create("release") {
+        storeFile = file(keystoreProps.getProperty("storeFile"))
+        storePassword = keystoreProps.getProperty("storePassword")
+        keyAlias = keystoreProps.getProperty("keyAlias")
+        keyPassword = keystoreProps.getProperty("keyPassword")
+      }
+    }
+  }
   compileSdk { version = release(37) { minorApiLevel = 0 } }
 
   defaultConfig {
@@ -30,7 +50,7 @@ android {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Signing config is added once the release keystore exists (see android/README.md).
+      signingConfig = signingConfigs.findByName("release")
     }
   }
   compileOptions {
