@@ -137,18 +137,20 @@ impl Audio {
         tokio::fs::create_dir_all(&self.dir).await?;
         let cookies = std::env::var("MUSIC_COOKIES").unwrap_or_default();
         let use_cookies = !cookies.is_empty() && Path::new(&cookies).exists();
-        // Последние две попытки — клиенты с PO-токеном от bgutil-provider (127.0.0.1:4416):
-        // они проходят проверку «not a bot», когда обычные запросы режутся.
-        let sources: [(String, Option<&str>); 4] = [
+        // visionos отдаёт тот же формат 140 без «рекламной» паузы в 5–6 с, которую YouTube требует
+        // от tv-клиентов по умолчанию: старт ~1,5 с вместо ~9 с. Дальше — запасные пути,
+        // последние два — с PO-токеном от bgutil-provider (127.0.0.1:4416).
+        let sources: [(String, Option<&str>); 5] = [
+            (format!("https://music.youtube.com/watch?v={id}"), Some("youtube:player_client=visionos")),
             (format!("https://music.youtube.com/watch?v={id}"), None),
             (format!("https://www.youtube.com/watch?v={id}"), None),
-            (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=mweb")),
             (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=tv_simply")),
+            (format!("https://www.youtube.com/watch?v={id}"), Some("youtube:player_client=mweb")),
         ];
         let mut last = String::new();
         for (i, (url, extractor)) in sources.iter().enumerate() {
-            if i > 0 {
-                tokio::time::sleep(Duration::from_millis(500 * i as u64)).await;
+            if i > 1 {
+                tokio::time::sleep(Duration::from_millis(400 * i as u64)).await;
             }
             let mut cmd = tokio::process::Command::new(&self.ytdlp);
             cmd.args([
