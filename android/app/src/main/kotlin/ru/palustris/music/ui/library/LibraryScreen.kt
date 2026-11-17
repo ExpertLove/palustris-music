@@ -38,7 +38,9 @@ import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -116,11 +118,10 @@ fun LibraryScreen(
   }
 
   Column(Modifier.fillMaxSize()) {
-    Text(
-      "Моя музыка",
-      style = MaterialTheme.typography.headlineLarge,
-      modifier = Modifier.statusBarsPadding().padding(start = 20.dp, top = 12.dp, bottom = 8.dp),
-    )
+    Row(Modifier.statusBarsPadding().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+      Text("Моя музыка", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
+      IconButton(onClick = nav::openStats) { Icon(Icons.Rounded.Insights, "Статистика") }
+    }
     PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp) {
       LibraryTab.entries.forEach { t ->
         val count =

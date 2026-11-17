@@ -115,6 +115,16 @@ import ru.palustris.music.ui.common.LocalTrackActions
 import ru.palustris.music.ui.common.LocalTrackMarks
 import ru.palustris.music.ui.common.PlayingBars
 import ru.palustris.music.ui.common.formatTime
+import ru.palustris.music.ui.common.TrackMenu
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import ru.palustris.music.media.QueueSource
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.ThumbDown
+import androidx.compose.material.icons.rounded.ThumbDownOffAlt
 
 /** Команды плеера, которые нужны экрану. */
 interface PlayerControls {
@@ -123,6 +133,9 @@ interface PlayerControls {
   fun next()
 
   fun previous()
+
+  /** Предыдущий трек очереди (а не начало текущего): для жеста по обложке. */
+  fun previousTrack()
 
   fun seekTo(ms: Long)
 
@@ -155,6 +168,8 @@ fun FullPlayer(
   onOpenEqualizer: () -> Unit,
   onOpenArtist: () -> Unit,
   speedPercent: Int = 100,
+  sheet: PlayerSheetState? = null,
+  beat: Beat? = null,
 ) {
   val track = state.track ?: return
   val marks = LocalTrackMarks.current
@@ -176,27 +191,27 @@ fun FullPlayer(
       .background(scheme.surface)
       // Плеер лежит поверх экранов: касания не должны проходить к спискам под ним.
       .pointerInput(Unit) { detectTapGestures { } }
-      .pointerInput(Unit) { detectVerticalDragGestures { _, drag -> if (drag > 18) onCollapse() } }
+      // Лист ездит за пальцем: вниз — свернуть. Списки внутри (текст песни) прокручиваются сами.
+      .then(
+        if (sheet != null)
+          Modifier.draggable(
+            orientation = Orientation.Vertical,
+            state = rememberDraggableState { dy -> sheet.dragBy(-dy) },
+            onDragStopped = { v -> sheet.settle(-v) },
+          )
+        else Modifier.pointerInput(Unit) { detectVerticalDragGestures { _, drag -> if (drag > 18) onCollapse() } }
+      )
   ) {
-    // Фон: та же обложка, сильно размытая, под тёмной вуалью в цвет темы.
+    // Фон: живые пятна в цветах обложки, сверху — сама обложка, сильно размытая.
+    LiveBackground(beat, Modifier.fillMaxSize())
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       AsyncImage(
         model = Streams.artwork(track.thumb, 120),
         contentDescription = null,
         contentScale = ContentScale.Crop,
-        modifier = Modifier.fillMaxSize().blur(90.dp).graphicsLayer { alpha = 0.55f },
+        modifier = Modifier.fillMaxSize().blur(90.dp).graphicsLayer { alpha = 0.3f },
       )
     }
-    Box(
-      Modifier.fillMaxSize()
-        .background(
-          Brush.verticalGradient(
-            0f to scheme.primaryContainer.copy(alpha = 0.55f),
-            0.55f to scheme.surface.copy(alpha = 0.82f),
-            1f to scheme.surface,
-          )
-        )
-    )
 
     Column(
       Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 24.dp),
@@ -225,6 +240,20 @@ fun FullPlayer(
           }
         }
         IconButton(onClick = { nav.addToPlaylist(track) }) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "В плейлист") }
+        Box {
+          var menu by remember { mutableStateOf(false) }
+          IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "Ещё") }
+          TrackMenu(
+            track,
+            expanded = menu,
+            onDismiss = { menu = false },
+            liked = liked,
+            disliked = track.id in marks.disliked,
+            dl = dl,
+            actions = actions,
+            inPlayer = true,
+          )
+        }
       }
 
       if (showLyrics) {
@@ -234,30 +263,45 @@ fun FullPlayer(
       } else {
       Spacer(Modifier.weight(0.6f))
 
-      // Обложка чуть «выдыхает» на паузе.
+      // Обложка чуть «выдыхает» на паузе и пульсирует на ударах баса.
       val scale by animateFloatAsState(
         if (state.playWhenReady) 1f else 0.88f,
         spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "artScale",
       )
-      AnimatedContent(
-        track.thumb,
-        transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.92f)) togetherWith fadeOut() },
-        label = "artwork",
-        modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
-      ) { thumb ->
-        Artwork(
-          thumb,
-          Modifier.fillMaxWidth()
+      val prev = state.queue.getOrNull(state.index - 1)
+      val next = state.upNext.firstOrNull()?.let { state.queue.getOrNull(it) }
+      SwipeArtwork(
+        current = track,
+        prev = prev,
+        next = next,
+        onNext = controls::next,
+        onPrev = controls::previousTrack,
+        modifier =
+          Modifier.widthIn(max = 420.dp)
+            .fillMaxWidth()
             .aspectRatio(1f)
+            .onGloballyPositioned { c -> if (sheet != null && sheet.progress.value == 1f && sheet.back == 0f) sheet.fullArt = c.boundsInWindow() }
+            // Пока обложка перелетает из мини-плеера, настоящая спрятана.
+            .graphicsLayer { alpha = if (sheet?.morphing == true) 0f else 1f },
+      ) { t, m ->
+        Artwork(
+          t.thumb,
+          m.fillMaxSize()
             .graphicsLayer {
-              scaleX = scale
-              scaleY = scale
+              val pulse = 1f + 0.035f * (beat?.bass ?: 0f)
+              scaleX = scale * pulse
+              scaleY = scale * pulse
             }
             .shadow(28.dp, RoundedCornerShape(32.dp)),
           size = 720,
           shape = RoundedCornerShape(32.dp),
         )
+      }
+      if (beat != null && state.isPlaying) {
+        Spectrum(beat, Modifier.padding(top = 18.dp).widthIn(max = 280.dp).fillMaxWidth().height(22.dp))
+      } else {
+        Spacer(Modifier.height(40.dp))
       }
 
       Spacer(Modifier.weight(0.5f))
@@ -279,6 +323,28 @@ fun FullPlayer(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Открыть исполнителя", onClick = onOpenArtist),
           )
+          // Почему этот трек в волне или радио: «Похоже на «Tusa»».
+          val why = track.why
+          if (why != null && QueueSource.isRecommended(state.source)) {
+            Text(
+              why,
+              style = MaterialTheme.typography.labelMedium,
+              color = scheme.primary,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(top = 2.dp),
+            )
+          }
+        }
+        if (QueueSource.isRecommended(state.source)) {
+          val disliked = track.id in marks.disliked
+          IconButton(onClick = { actions.dislike(track) }) {
+            Icon(
+              if (disliked) Icons.Rounded.ThumbDown else Icons.Rounded.ThumbDownOffAlt,
+              if (disliked) "Убрать из «Не нравится»" else "Не нравится",
+              tint = scheme.onSurfaceVariant,
+            )
+          }
         }
         DownloadButton(dl, onDownload = { actions.download(listOf(track)) }, onRemove = { actions.removeDownload(track) })
         IconButton(onClick = { actions.toggleLike(track) }) {

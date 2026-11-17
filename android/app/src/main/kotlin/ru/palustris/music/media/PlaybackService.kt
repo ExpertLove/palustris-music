@@ -54,8 +54,11 @@ import ru.palustris.music.core.net.apiCall
 import ru.palustris.music.core.prefs.SettingsStore
 import ru.palustris.music.data.Outbox
 import ru.palustris.music.data.PendingOp
+import ru.palustris.music.data.Recommendations
 import ru.palustris.music.media.audio.CrossfadePlan
 import ru.palustris.music.media.audio.CrossfadeProcessor
+import ru.palustris.music.media.audio.AudioLevels
+import ru.palustris.music.media.audio.LevelProcessor
 import ru.palustris.music.media.audio.LoudnessProcessor
 import ru.palustris.music.media.audio.LoudnessStore
 import ru.palustris.music.media.eq.EqualizerProcessor
@@ -81,6 +84,8 @@ class PlaybackService : MediaLibraryService() {
   @Inject lateinit var settings: SettingsStore
   @Inject lateinit var outbox: Outbox
   @Inject lateinit var nowPlaying: NowPlayingStore
+  @Inject lateinit var recs: Recommendations
+  @Inject lateinit var levels: AudioLevels
 
   @Inject lateinit var tree: LibraryTree
 
@@ -156,6 +161,8 @@ class PlaybackService : MediaLibraryService() {
       mutableListOf<AudioProcessor>(
         LoudnessProcessor(loudness::gain),
         EqualizerProcessor { equalizer.snapshot },
+        // Спектр для анимации плеера: после эквалайзера (что слышно), до перехода (время трека).
+        LevelProcessor(levels),
         CrossfadeProcessor({ crossfadePlan }),
       )
     // Отладка: `adb shell run-as ru.palustris.music.debug touch files/pcm_dump` — и всё, что уходит
@@ -419,7 +426,9 @@ class PlaybackService : MediaLibraryService() {
     private var playedMs = 0L
     private var playingSince = 0L
     private var errorsInRow = 0
-    private var extendingWave = false
+    private var extending = false
+    /** Пропуски подряд в волне: после двух волна перестраивается, как в Яндекс Музыке. */
+    private var skipsInRow = 0
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
       val now = SystemClock.elapsedRealtime()
@@ -440,13 +449,13 @@ class PlaybackService : MediaLibraryService() {
       playedMs = 0
       playingSince = if (player.isPlaying) now else 0
       prefetchNext()
-      extendWave()
+      extend()
       requestLoudness(player)
     }
 
-    /** Из очереди «Моей волны» убрали треки или очистили «Далее»: волна догружается сразу. */
+    /** Из очереди волны или радио убрали треки или очистили «Далее»: продолжение догружается сразу. */
     override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-      if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) extendWave()
+      if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) extend()
     }
 
     private fun report(item: MediaItem, played: Long, manual: Boolean) {
@@ -454,8 +463,36 @@ class PlaybackService : MediaLibraryService() {
       val dur = track.duration * 1000
       val listened = played >= 30_000 || (dur > 0 && played >= dur / 2)
       if (!listened && !(manual && played < 15_000)) return
-      // Прослушивание ждёт сети в очереди: без него «Моя волна» не узнает, что слушали в метро.
-      if (listened) outbox.add(PendingOp.Listened(track)) else scope.launch { apiCall { api.skip(track) } }
+      if (listened) {
+        skipsInRow = 0
+        // Прослушивание ждёт сети в очереди: без него «Моя волна» не узнает, что слушали в метро.
+        val at = System.currentTimeMillis() / 1000 - played / 1000
+        outbox.add(PendingOp.Listened(track, at = at, secs = played / 1000))
+        return
+      }
+      val inWave = item.queueSource == QueueSource.WAVE
+      if (inWave) skipsInRow++
+      val rebuild = inWave && skipsInRow >= 2
+      if (rebuild) skipsInRow = 0
+      scope.launch {
+        apiCall { api.skip(track) }
+        // Два пропуска подряд — волна не попадает: сервер уже знает о пропусках, берём свежую.
+        if (rebuild) rebuildWaveAhead()
+      }
+    }
+
+    /** Заменить всё, что в волне впереди, свежей подборкой. Текущий трек доигрывает. */
+    private suspend fun rebuildWaveAhead() {
+      val current = player.currentMediaItem ?: return
+      if (current.queueSource != QueueSource.WAVE) return
+      val fresh = recs.wave().getOrNull()?.takeIf { it.size >= 5 } ?: return
+      val idx = player.currentMediaItemIndex
+      val keep = (0..idx).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
+      val items = fresh.filter { it.id !in keep }.map { it.toMediaItem(QueueSource.WAVE) }
+      if (items.isEmpty() || player.currentMediaItem?.mediaId != current.mediaId) return
+      // Одной заменой, иначе пустое «Далее» запустило бы догрузку старой волны.
+      player.replaceMediaItems(idx + 1, player.mediaItemCount, items)
+      Timber.i("wave rebuilt after skips: %d new", items.size)
     }
 
     /** Сервер заранее скачивает следующие треки, чтобы они стартовали без паузы. */
@@ -469,19 +506,23 @@ class PlaybackService : MediaLibraryService() {
       if (ids.isNotEmpty()) scope.launch { apiCall { api.prefetch(IdsBody(ids)) } }
     }
 
-    /** «Моя волна» бесконечная: когда впереди меньше трёх треков, догружаем новые. */
-    private fun extendWave() {
+    /**
+     * «Моя волна» и радио бесконечные: когда впереди меньше трёх треков, догружаем новые. Волна —
+     * с текущими настройками, радио — похожее на то, что играет сейчас (так оно плавно дрейфует).
+     */
+    private fun extend() {
       val current = player.currentMediaItem ?: return
-      if (current.queueSource != QueueSource.WAVE || extendingWave) return
+      val source = current.queueSource
+      if ((source != QueueSource.WAVE && source != QueueSource.RADIO) || extending) return
       if (player.mediaItemCount - player.currentMediaItemIndex > 3) return
-      extendingWave = true
+      extending = true
       scope.launch {
-        apiCall { api.wave() }
-          .onSuccess { more ->
-            val have = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
-            player.addMediaItems(more.filter { it.id !in have }.map { it.toMediaItem(QueueSource.WAVE) })
-          }
-        extendingWave = false
+        val more = if (source == QueueSource.WAVE) recs.wave() else recs.radio(current.toTrack())
+        more.onSuccess { list ->
+          val have = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
+          player.addMediaItems(list.filter { it.id !in have }.map { it.toMediaItem(source) })
+        }
+        extending = false
       }
     }
 

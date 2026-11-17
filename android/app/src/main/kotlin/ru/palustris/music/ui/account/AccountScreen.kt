@@ -75,6 +75,9 @@ import ru.palustris.music.core.model.Me
 import ru.palustris.music.ui.common.ActionRow
 import ru.palustris.music.ui.common.BackBar
 import ru.palustris.music.ui.common.GroupCard
+import ru.palustris.music.ui.common.LocalNavigator
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Insights
 import ru.palustris.music.ui.common.GroupHeader
 import ru.palustris.music.ui.common.LoadingState
 import ru.palustris.music.ui.common.MessageState
@@ -99,6 +102,7 @@ fun AccountScreen(
   var confirmLogout by remember { mutableStateOf(false) }
   var confirmDelete by remember { mutableStateOf(false) }
   val context = LocalContext.current
+  val nav = LocalNavigator.current
   LaunchedEffect(Unit) { vm.messages.collect(onMessage) }
   LaunchedEffect(Unit) { vm.passwordChanged.collect { changingPassword = false } }
 
@@ -135,6 +139,12 @@ fun AccountScreen(
       }
     }
 
+    item {
+      GroupCard {
+        ActionRow(Icons.Rounded.Insights, "Статистика", "Сколько, что и когда вы слушаете", onClick = nav::openStats)
+        ActionRow(Icons.Rounded.AutoAwesome, "Итоги года", "Ваш год в музыке в виде историй", onClick = nav::openWrapped)
+      }
+    }
     item { GroupHeader("Профиль") }
     item { ProfileCard(m, saving = ui.saving, onSave = vm::save) }
 

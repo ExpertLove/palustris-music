@@ -68,6 +68,17 @@
             android:authorities="${applicationId}.artwork"
             android:exported="true" />
 
+        <!-- Картинки для «Поделиться» (итоги года, строки песен) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Кнопка «играть» на гарнитуре, когда приложение закрыто: продолжить с того же места -->
         <receiver
             android:name="androidx.media3.session.MediaButtonReceiver"

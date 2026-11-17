@@ -36,10 +36,16 @@ class LibraryBrowseTest {
         val root = browser.getLibraryRoot(null).await()
         assertEquals(LibraryResult.RESULT_SUCCESS, root.resultCode)
         val top = browser.getChildren(root.value!!.mediaId, 0, 100, null).await().value!!.map { it.mediaId }
-        assertEquals(listOf("wave", "likes", "playlists", "downloads", "recent", "moods"), top)
+        assertEquals(listOf("wave", "likes", "playlists", "downloads", "recent", "mixes", "moods"), top)
 
         val moods = browser.getChildren("moods", 0, 100, null).await().value!!
         assertEquals(20, moods.size)
+
+        // Миксы дня: у тестового аккаунта есть история, значит, есть и миксы.
+        val mixes = browser.getChildren("mixes", 0, 100, null).await().value!!
+        assertTrue("миксы дня собрались", mixes.isNotEmpty())
+        val mixTracks = browser.getChildren(mixes.first().mediaId, 0, 100, null).await().value!!
+        assertTrue(mixTracks.size >= 10)
 
         val playlists = browser.getChildren("playlists", 0, 100, null).await().value!!
         assertTrue("у тестового аккаунта есть плейлисты", playlists.isNotEmpty())

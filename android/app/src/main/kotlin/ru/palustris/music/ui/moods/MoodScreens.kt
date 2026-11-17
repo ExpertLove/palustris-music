@@ -141,7 +141,7 @@ constructor(private val api: MusicApi, private val files: OfflineFiles, private 
   }
 
   private suspend fun load(m: Mood) {
-    val results = coroutineScope { m.queries.map { q -> async { apiCall { api.searchTracks(q) } } }.awaitAll() }
+    val results = coroutineScope { m.queries.map { q -> async { apiCall { api.searchTracks(q, SONGS) } } }.awaitAll() }
     val lists = results.mapNotNull { it.getOrNull() }
     if (lists.isEmpty()) {
       val e = results.firstNotNullOfOrNull { it.exceptionOrNull() }
@@ -167,12 +167,21 @@ constructor(private val api: MusicApi, private val files: OfflineFiles, private 
   private fun file(m: Mood) = "mood-${m.id}.json"
 
   companion object {
+    /** Поиск только песен (`/api/search?kind=songs`). */
+    const val SONGS = "songs"
+    const val MAX_SONG_SEC = 720L
+
     /** По одному треку из каждого поиска по очереди, без повторов: подборка звучит разнообразно. */
     fun interleave(lists: List<List<Track>>): List<Track> {
       val seen = HashSet<String>()
       val out = ArrayList<Track>()
       val longest = lists.maxOfOrNull { it.size } ?: 0
-      for (i in 0 until longest) for (l in lists) l.getOrNull(i)?.let { if (seen.add(it.id)) out += it }
+      for (i in 0 until longest) {
+        for (l in lists) {
+          // Дольше 12 минут — это часовая «музыка для сна», а не песня.
+          l.getOrNull(i)?.let { if (it.duration <= MAX_SONG_SEC && seen.add(it.id)) out += it }
+        }
+      }
       return out
     }
   }

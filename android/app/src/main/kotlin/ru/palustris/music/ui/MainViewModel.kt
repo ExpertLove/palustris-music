@@ -27,6 +27,12 @@ import ru.palustris.music.core.model.PlaylistRow
 import ru.palustris.music.data.AccountRepository
 import ru.palustris.music.data.HistoryRepository
 import ru.palustris.music.data.LibraryRepository
+import ru.palustris.music.data.MixesRepository
+import ru.palustris.music.data.Recommendations
+import ru.palustris.music.data.TasteRepository
+import ru.palustris.music.core.prefs.WaveSettings
+import ru.palustris.music.media.QueueSource
+import ru.palustris.music.media.audio.AudioLevels
 import ru.palustris.music.data.OfflineFiles
 import ru.palustris.music.data.Outbox
 import ru.palustris.music.data.PlaylistsRepository
@@ -57,6 +63,11 @@ constructor(
   private val outbox: Outbox,
   private val files: OfflineFiles,
   private val history: HistoryRepository,
+  private val taste: TasteRepository,
+  private val recs: Recommendations,
+  private val mixes: MixesRepository,
+  /** Уровни звука для анимации плеера. */
+  val levels: AudioLevels,
   equalizer: EqualizerStore,
 ) : ViewModel(), TrackActions, PlayerControls {
 
@@ -109,13 +120,13 @@ constructor(
   val playerState: StateFlow<PlayerState> = player.state
 
   val marks: StateFlow<TrackMarks> =
-    combine(library.likedIds, storage.downloads, player.state) { liked, dls, ps ->
-        TrackMarks(liked, dls, ps.track?.id, ps.isPlaying)
+    combine(library.likedIds, storage.downloads, player.state, taste.dislikedIds) { liked, dls, ps, disliked ->
+        TrackMarks(liked, dls, ps.track?.id, ps.isPlaying, disliked)
       }
       .distinctUntilChanged()
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TrackMarks())
 
-  private val _messages = Channel<String>(Channel.BUFFERED)
+  private val _messages = Channel<UiMessage>(Channel.BUFFERED)
   val messages = _messages.receiveAsFlow()
 
   /** Нужно ли спросить разрешение на уведомления перед первой загрузкой. */
@@ -127,12 +138,13 @@ constructor(
     viewModelScope.launch {
       session.filterIsInstance<Session.LoggedIn>().map { it.token }.distinctUntilChanged().collect {
         launch { account.refresh() }
+        launch { taste.refresh() }
         library.refresh()
         playlistsRepo.refresh()
       }
     }
     viewModelScope.launch {
-      player.state.map { it.error }.distinctUntilChanged().collect { e -> if (e != null) _messages.send(e) }
+      player.state.map { it.error }.distinctUntilChanged().collect { e -> if (e != null) _messages.send(UiMessage(e)) }
     }
   }
 
@@ -148,21 +160,90 @@ constructor(
     }
     val fresh = tracks.filter { storage.downloads.value[it.id]?.state.let { s -> s == null || s == TrackDownload.State.Failed } }
     storage.download(fresh)
-    if (fresh.size > 1) _messages.trySend("Скачиваем ${ru.palustris.music.ui.common.pluralTracks(fresh.size)}")
-    if (settings.current.wifiOnly) _messages.trySend("Скачается, когда подключитесь к Wi‑Fi")
+    if (fresh.size > 1) message("Скачиваем ${ru.palustris.music.ui.common.pluralTracks(fresh.size)}")
+    if (settings.current.wifiOnly) message("Скачается, когда подключитесь к Wi‑Fi")
   }
 
   override fun removeDownload(track: Track) = storage.remove(track.id)
 
   override fun playNext(track: Track) {
     player.playNext(track)
-    _messages.trySend("Сыграет следующим")
+    message("Сыграет следующим")
   }
 
   override fun enqueue(track: Track) {
     player.enqueue(track)
-    _messages.trySend("Добавлен в очередь")
+    message("Добавлен в очередь")
   }
+
+  override fun startRadio(track: Track) {
+    viewModelScope.launch {
+      recs.radio(track).fold(
+        { list ->
+          if (list.isEmpty()) {
+            message("Для этого трека радио не нашлось")
+          } else {
+            // Трек уже играет: он доигрывает, а дальше идёт радио.
+            if (player.state.value.track?.id == track.id) player.replaceUpcoming(list, QueueSource.RADIO)
+            else player.play(listOf(track.copy(why = null)) + list, 0, QueueSource.RADIO)
+            message("Радио «${track.title}»")
+          }
+        },
+        { message(it.message ?: "Не получилось включить радио") },
+      )
+    }
+  }
+
+  override fun artistRadio(id: String?, name: String) {
+    viewModelScope.launch {
+      recs.artistRadio(id, name).fold(
+        { list -> if (list.isEmpty()) message("Радио не нашлось") else player.play(list, 0, QueueSource.RADIO) },
+        { message(it.message ?: "Не получилось включить радио") },
+      )
+    }
+  }
+
+  override fun dislike(track: Track) {
+    if (track.id in taste.dislikedIds.value) {
+      taste.undislike(track.id)
+      message("Убрали из «Не нравится»")
+      return
+    }
+    taste.dislike(track)
+    if (player.state.value.track?.id == track.id) player.next()
+    player.removeUpcoming { it.id == track.id }
+    _messages.trySend(UiMessage("Больше не предложим этот трек", "Отменить") { taste.undislike(track.id) })
+  }
+
+  override fun hideArtist(track: Track) {
+    val name = track.artist.substringBefore(',').trim()
+    taste.block(name)
+    player.removeUpcoming { taste.isBlocked(it.artist) }
+    if (player.state.value.track?.let { taste.isBlocked(it.artist) } == true) player.next()
+    _messages.trySend(UiMessage("$name больше не будет в рекомендациях", "Отменить") { taste.unblock(name) })
+  }
+
+  /** Настройки волны. Если волна играет, всё впереди сразу пересобирается под новые настройки. */
+  fun setWave(w: WaveSettings) {
+    viewModelScope.launch {
+      settings.setWave(w)
+      if (player.state.value.source == QueueSource.WAVE) {
+        recs.wave(w).onSuccess { list ->
+          if (list.isNotEmpty()) {
+            player.replaceUpcoming(list, QueueSource.WAVE)
+            message("Волна перестроена")
+          }
+        }
+      }
+    }
+  }
+
+  /** «Анимация под музыку» в настройках. */
+  val beatMotion: StateFlow<Boolean> =
+    settings.settings.map { it?.beatMotion ?: true }.stateIn(viewModelScope, SharingStarted.Eagerly, settings.current.beatMotion)
+
+  val wave: StateFlow<WaveSettings> =
+    settings.settings.map { it?.wave ?: WaveSettings() }.stateIn(viewModelScope, SharingStarted.Eagerly, settings.current.wave)
 
   // PlayerControls
   override fun togglePlay() = player.togglePlay()
@@ -170,6 +251,8 @@ constructor(
   override fun next() = player.next()
 
   override fun previous() = player.previous()
+
+  override fun previousTrack() = player.previousTrack()
 
   override fun seekTo(ms: Long) = player.seekTo(ms)
 
@@ -209,18 +292,18 @@ constructor(
   fun addToPlaylist(p: PlaylistRow, track: Track) {
     _pickPlaylistFor.value = null
     playlistsRepo.add(p.id, track)
-    _messages.trySend("Добавлен в «${p.name}»")
+    message("Добавлен в «${p.name}»")
   }
 
   fun createPlaylistWith(name: String, track: Track) {
     _pickPlaylistFor.value = null
     viewModelScope.launch {
-      playlistsRepo.create(name, listOf(track)).fold({ _messages.send("Плейлист «${name.trim()}» создан") }, { _messages.send(it.message ?: "Не получилось") })
+      playlistsRepo.create(name, listOf(track)).fold({ message("Плейлист «${name.trim()}» создан") }, { message(it.message ?: "Не получилось") })
     }
   }
 
   fun message(text: String) {
-    _messages.trySend(text)
+    _messages.trySend(UiMessage(text))
   }
 
   fun logout() {
@@ -234,7 +317,7 @@ constructor(
   fun onAccountDeleted() {
     viewModelScope.launch {
       signOut(wipeDownloads = true)
-      _messages.send("Аккаунт удалён")
+      message("Аккаунт удалён")
     }
   }
 
@@ -243,6 +326,8 @@ constructor(
     sleepTimer.cancel()
     outbox.clear()
     library.clear()
+    taste.clear()
+    mixes.clear()
     playlistsRepo.clear()
     account.clear()
     history.reset()
@@ -254,3 +339,6 @@ constructor(
     sessionStore.clear()
   }
 }
+
+/** Сообщение внизу экрана; с [action] — кнопка, например «Отменить». */
+data class UiMessage(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null)

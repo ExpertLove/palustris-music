@@ -38,6 +38,9 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.foundation.layout.widthIn
+import ru.palustris.music.core.prefs.WaveSettings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
@@ -96,10 +99,20 @@ import ru.palustris.music.ui.moods.moodsForHour
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(player: PlayerState, contentPadding: PaddingValues, onToggle: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
+fun HomeScreen(
+  player: PlayerState,
+  contentPadding: PaddingValues,
+  onToggle: () -> Unit,
+  onWaveChange: (WaveSettings) -> Unit,
+  vm: HomeViewModel = hiltViewModel(),
+) {
   val ui by vm.ui.collectAsStateWithLifecycle()
   val me by vm.me.collectAsStateWithLifecycle()
   val lib by vm.library.collectAsStateWithLifecycle()
+  val mixes by vm.mixes.collectAsStateWithLifecycle()
+  val wave by vm.wave.collectAsStateWithLifecycle()
+  var waveSheet by remember { mutableStateOf(false) }
+  val wrappedYear = remember { wrappedSeason() }
   val actions = LocalTrackActions.current
   val nav = LocalNavigator.current
   val scope = rememberCoroutineScope()
@@ -119,6 +132,8 @@ fun HomeScreen(player: PlayerState, contentPadding: PaddingValues, onToggle: () 
           preview = data.wave,
           playing = waveIsCurrent && player.playWhenReady,
           busy = startingWave,
+          label = wave.label,
+          onSettings = { waveSheet = true },
           onPlay = {
             if (waveIsCurrent) onToggle()
             else {
@@ -134,6 +149,14 @@ fun HomeScreen(player: PlayerState, contentPadding: PaddingValues, onToggle: () 
         )
       }
       item(key = "shortcuts") { Shortcuts(lib, onOpen = nav::openLibrary) }
+      if (wrappedYear != null) {
+        item(key = "wrapped") { WrappedBanner(wrappedYear, onOpen = nav::openWrapped, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+      }
+
+      mixes?.mixes?.takeIf { it.isNotEmpty() }?.let { list ->
+        item(key = "mixes-title") { SectionTitle("Миксы дня") }
+        item(key = "mixes") { MixShelf(list, onOpen = { nav.openMix(it.id) }) }
+      }
 
       if (history.isNotEmpty()) {
         item(key = "recent-title") {
@@ -145,6 +168,14 @@ fun HomeScreen(player: PlayerState, contentPadding: PaddingValues, onToggle: () 
       item(key = "moods-title") { SectionTitle("Настроение") { TextButton(onClick = nav::openMoods) { Text("Все") } } }
       item(key = "moods") { MoodRow(moods, onOpen = { nav.openMood(it.id) }) }
 
+      mixes?.repeat?.takeIf { it.size >= 4 }?.let { list ->
+        item(key = "repeat-title") { SectionTitle("На повторе") }
+        item(key = "repeat") { TrackShelf(list, onPlay = { i -> actions.play(list, i) }) }
+      }
+      data.week?.takeIf { it.minutes > 0 }?.let { w ->
+        item(key = "week") { WeekTeaser(w, onOpen = nav::openStats, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
+      }
+
       if (data.recs.isNotEmpty()) {
         item(key = "recs-title") {
           SectionTitle("Для вас") {
@@ -152,6 +183,11 @@ fun HomeScreen(player: PlayerState, contentPadding: PaddingValues, onToggle: () 
           }
         }
         item(key = "recs") { RecsPager(data.recs, onPlay = { i -> actions.play(data.recs, i, "recs") }) }
+      }
+
+      mixes?.forgotten?.takeIf { it.size >= 4 }?.let { list ->
+        item(key = "forgotten-title") { SectionTitle("Забытое любимое") }
+        item(key = "forgotten") { TrackShelf(list, onPlay = { i -> actions.play(list, i) }) }
       }
 
       lib.playlists?.takeIf { it.isNotEmpty() }?.let { pls ->
@@ -189,6 +225,7 @@ fun HomeScreen(player: PlayerState, contentPadding: PaddingValues, onToggle: () 
       }
     }
   }
+  if (waveSheet) WaveSettingsSheet(wave, onChange = onWaveChange, onDismiss = { waveSheet = false })
 }
 
 private const val TOP_ON_HOME = 5
@@ -356,7 +393,15 @@ private fun PlaylistShelf(playlists: List<PlaylistRow>, onOpen: (PlaylistRow) ->
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun WaveCard(preview: List<Track>, playing: Boolean, busy: Boolean, onPlay: () -> Unit, modifier: Modifier = Modifier) {
+private fun WaveCard(
+  preview: List<Track>,
+  playing: Boolean,
+  busy: Boolean,
+  label: String,
+  onSettings: () -> Unit,
+  onPlay: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
   val scheme = MaterialTheme.colorScheme
   val corner by animateDpAsState(if (playing) 22.dp else 36.dp, spring(0.45f, Spring.StiffnessMediumLow), label = "waveBtn")
   Box(
@@ -367,10 +412,25 @@ private fun WaveCard(preview: List<Track>, playing: Boolean, busy: Boolean, onPl
       .background(Brush.linearGradient(listOf(scheme.primaryContainer, scheme.tertiaryContainer, scheme.secondaryContainer)))
       .clickable(onClick = onPlay)
   ) {
-    Box(
-      Modifier.align(Alignment.TopStart).padding(20.dp).clip(CircleShape).background(scheme.surface.copy(alpha = 0.28f)).padding(horizontal = 12.dp, vertical = 6.dp)
+    // Настройки волны: подпись показывает, что выбрано.
+    Row(
+      Modifier.align(Alignment.TopStart)
+        .padding(16.dp)
+        .clip(CircleShape)
+        .background(scheme.surface.copy(alpha = 0.32f))
+        .clickable(onClick = onSettings, role = Role.Button, onClickLabel = "Настроить волну")
+        .padding(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Text(if (playing) "Играет" else "Подборка для вас", style = MaterialTheme.typography.labelLarge, color = scheme.onPrimaryContainer)
+      Icon(Icons.Rounded.Tune, null, Modifier.size(18.dp), tint = scheme.onPrimaryContainer)
+      Text(
+        label.ifEmpty { if (playing) "Играет" else "Настроить" },
+        style = MaterialTheme.typography.labelLarge,
+        color = scheme.onPrimaryContainer,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(start = 6.dp).widthIn(max = 150.dp),
+      )
     }
     Box(Modifier.align(Alignment.TopEnd).padding(top = 18.dp, end = 18.dp)) {
       preview.take(3).reversed().forEachIndexed { i, t ->

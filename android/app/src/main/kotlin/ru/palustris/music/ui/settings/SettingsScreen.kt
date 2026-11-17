@@ -62,6 +62,8 @@ import ru.palustris.music.ui.account.Avatar
 import ru.palustris.music.ui.player.SpeedChips
 import ru.palustris.music.ui.common.GroupCard
 import ru.palustris.music.ui.common.GroupHeader
+import ru.palustris.music.ui.common.LocalNavigator
+import androidx.compose.material.icons.rounded.VisibilityOff
 import ru.palustris.music.ui.common.formatBytes
 import ru.palustris.music.ui.common.formatMb
 import ru.palustris.music.ui.common.pluralTracks
@@ -81,6 +83,7 @@ fun SettingsScreen(
   val pending by vm.pending.collectAsStateWithLifecycle()
   var confirmRemove by remember { mutableStateOf(false) }
   val context = LocalContext.current
+  val nav = LocalNavigator.current
   val canPinWidget = remember { AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported }
 
   LazyColumn(contentPadding = contentPadding) {
@@ -115,6 +118,21 @@ fun SettingsScreen(
             )
           }
           Switch(checked = settings.normalize, onCheckedChange = vm::setNormalize)
+        }
+      }
+    }
+    item {
+      GroupCard(onClick = { vm.setBeatMotion(!settings.beatMotion) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Column(Modifier.weight(1f)) {
+            Text("Анимация под музыку", style = MaterialTheme.typography.titleMedium)
+            Text(
+              "В плеере обложка и фон двигаются в такт, внизу — спектр. Немного расходует батарею",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Switch(checked = settings.beatMotion, onCheckedChange = vm::setBeatMotion)
         }
       }
     }
@@ -252,6 +270,24 @@ fun SettingsScreen(
           ) {
             Text("Удалить все скачанные треки")
           }
+        }
+      }
+    }
+
+    item { GroupHeader("Рекомендации") }
+    item {
+      GroupCard(onClick = nav::openHidden) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Icon(Icons.Rounded.VisibilityOff, null)
+          Column(Modifier.weight(1f).padding(start = 16.dp)) {
+            Text("Скрытое", style = MaterialTheme.typography.titleMedium)
+            Text(
+              "Треки с «Не нравится» и исполнители, которых не предлагать",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null)
         }
       }
     }

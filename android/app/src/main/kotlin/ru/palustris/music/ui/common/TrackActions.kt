@@ -20,6 +20,18 @@ interface TrackActions {
   fun playNext(track: Track)
 
   fun enqueue(track: Track)
+
+  /** Бесконечное радио: похожие на этот трек. */
+  fun startRadio(track: Track)
+
+  /** Радио исполнителя: он сам и похожие. */
+  fun artistRadio(id: String?, name: String)
+
+  /** «Не нравится» (повторное нажатие отменяет). */
+  fun dislike(track: Track)
+
+  /** «Не предлагать исполнителя» этого трека. */
+  fun hideArtist(track: Track)
 }
 
 /** Состояние, которое нужно строке трека: лайк, загрузка, играет ли он сейчас. */
@@ -29,6 +41,7 @@ data class TrackMarks(
   val downloads: Map<String, TrackDownload> = emptyMap(),
   val currentId: String? = null,
   val isPlaying: Boolean = false,
+  val disliked: Set<String> = emptySet(),
 )
 
 val LocalTrackActions =
@@ -57,6 +70,17 @@ interface Navigator {
   fun openAccount()
 
   fun openSettings()
+
+  /** Микс дня по id (`mix1`…). */
+  fun openMix(id: String)
+
+  fun openStats()
+
+  /** «Итоги года». */
+  fun openWrapped()
+
+  /** Скрытые треки и исполнители. */
+  fun openHidden()
 
   fun openLibrary(tab: ru.palustris.music.ui.library.LibraryTab)
 

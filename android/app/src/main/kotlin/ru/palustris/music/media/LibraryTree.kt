@@ -19,6 +19,8 @@ import ru.palustris.music.core.model.Track
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
 import ru.palustris.music.data.LibraryRepository
+import ru.palustris.music.data.MixesRepository
+import ru.palustris.music.data.Recommendations
 import ru.palustris.music.data.OfflineFiles
 import ru.palustris.music.data.PlaylistsRepository
 import ru.palustris.music.ui.moods.MOODS
@@ -35,6 +37,7 @@ import ru.palustris.music.ui.moods.moodById
  * ├─ playlists       плейлисты → pl:{id} → треки
  * ├─ downloads       скачанные → треки
  * ├─ recent          недавно играло → треки
+ * ├─ mixes           миксы дня → mix:{id} → треки
  * └─ moods           настроение → mood:{id} → треки
  * ```
  *
@@ -50,6 +53,8 @@ constructor(
   private val playlists: PlaylistsRepository,
   private val storage: AudioStorage,
   private val files: OfflineFiles,
+  private val recs: Recommendations,
+  private val mixes: MixesRepository,
 ) {
   /** Последние показанные списки: по ним разворачиваем нажатие на трек. */
   private val lists = ConcurrentHashMap<String, List<Track>>()
@@ -64,6 +69,7 @@ constructor(
       id in FOLDERS -> topFolders().firstOrNull { it.mediaId == id }
       id.startsWith(PLAYLIST) -> playlistFolders().firstOrNull { it.mediaId == id }
       id.startsWith(MOOD) -> moodFolders().firstOrNull { it.mediaId == id }
+      id.startsWith(MIX) -> mixFolders().firstOrNull { it.mediaId == id }
       id.startsWith(ITEM) -> parseItem(id)?.let { (parent, trackId) -> tracks(parent).firstOrNull { it.id == trackId }?.let { trackItem(parent, it) } }
       else -> null
     }
@@ -73,6 +79,7 @@ constructor(
       ROOT -> listOf(waveItem()) + topFolders()
       PLAYLISTS -> playlistFolders()
       MOODS_ID -> moodFolders()
+      MIXES -> mixFolders()
       else -> tracks(parent).map { trackItem(parent, it) }
     }
 
@@ -80,7 +87,7 @@ constructor(
   suspend fun tracks(parent: String): List<Track> {
     val list: List<Track> =
       when {
-        parent == WAVE -> apiCall { api.wave() }.getOrNull().orEmpty()
+        parent == WAVE -> recs.wave().getOrNull().orEmpty()
         parent == LIKES -> library.likes.value ?: library.refresh().let { library.likes.value }.orEmpty()
         parent == DOWNLOADS ->
           storage.downloads.value.values.filter { it.state == TrackDownload.State.Done }.sortedByDescending { it.updatedAt }.map { it.track }
@@ -92,6 +99,7 @@ constructor(
           (playlists.observe(id).first() ?: playlists.load(id).getOrNull())?.items.orEmpty()
         }
         parent.startsWith(MOOD) -> moodTracks(parent.removePrefix(MOOD))
+        parent.startsWith(MIX) -> (mixes.mix(parent.removePrefix(MIX)) ?: mixes.refresh().getOrNull()?.mixes?.firstOrNull { it.id == parent.removePrefix(MIX) })?.tracks.orEmpty()
         parent == SEARCH -> lists[SEARCH].orEmpty()
         else -> emptyList()
       }
@@ -124,7 +132,7 @@ constructor(
         val (parent, trackId) = parseItem(first.mediaId) ?: return null
         val list = lists[parent] ?: tracks(parent)
         val i = list.indexOfFirst { it.id == trackId }
-        if (i < 0) null else Resolved(list, i, if (parent == WAVE) QueueSource.WAVE else null)
+        if (i < 0) null else Resolved(list, i, if (parent == WAVE) QueueSource.WAVE else if (parent.startsWith(MIX)) parent else null)
       }
       else -> null
     }
@@ -156,6 +164,7 @@ constructor(
       folder(PLAYLISTS, "Плейлисты", icon = "ic_auto_playlists", extras = contentStyle(browsable = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)),
       folder(DOWNLOADS, "Скачанные", icon = "ic_auto_downloads"),
       folder(RECENT, "Недавно играло", icon = "ic_auto_recent"),
+      folder(MIXES, "Миксы дня", icon = "ic_auto_playlists", extras = contentStyle(browsable = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)),
       folder(MOODS_ID, "Настроение", icon = "ic_auto_moods", extras = contentStyle(browsable = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)),
     )
 
@@ -166,13 +175,19 @@ constructor(
     }
   }
 
+  private suspend fun mixFolders(): List<MediaItem> {
+    val list = mixes.mixes.value?.mixes ?: mixes.refresh().getOrNull()?.mixes.orEmpty()
+    return list.map { m -> folder(MIX + m.id, m.title, subtitle = m.sub, art = m.thumbs.firstOrNull()) }
+  }
+
   private fun moodFolders() = MOODS.map { m -> folder(MOOD + m.id, m.title, subtitle = m.sub, icon = "ic_auto_moods") }
 
   private suspend fun moodTracks(id: String): List<Track> {
     val m = moodById(id) ?: return emptyList()
     val cached = files.read("mood-${m.id}.json", ListSerializer(Track.serializer()))
     if (cached != null) return cached
-    val lists = coroutineScope { m.queries.map { q -> async { apiCall { api.searchTracks(q) }.getOrNull() } }.awaitAll() }.filterNotNull()
+    val lists =
+      coroutineScope { m.queries.map { q -> async { apiCall { api.searchTracks(q, MoodViewModel.SONGS) }.getOrNull() } }.awaitAll() }.filterNotNull()
     return MoodViewModel.interleave(lists).also { if (it.isNotEmpty()) files.write("mood-${m.id}.json", ListSerializer(Track.serializer()), it) }
   }
 
@@ -235,8 +250,10 @@ constructor(
     const val SEARCH = "search"
     const val PLAYLIST = "pl:"
     const val MOOD = "mood:"
+    const val MIXES = "mixes"
+    const val MIX = "mix:"
     const val ITEM = "item"
-    private val FOLDERS = setOf(LIKES, PLAYLISTS, DOWNLOADS, RECENT, MOODS_ID)
+    private val FOLDERS = setOf(LIKES, PLAYLISTS, DOWNLOADS, RECENT, MIXES, MOODS_ID)
 
     /** `item|pl:5|abc` → (`pl:5`, `abc`). */
     fun parseItem(id: String): Pair<String, String>? {

@@ -22,8 +22,14 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import ru.palustris.music.core.model.HistoryItem
 import ru.palustris.music.core.model.Me
+import ru.palustris.music.core.model.Mixes
 import ru.palustris.music.core.model.PlaylistRow
+import ru.palustris.music.core.model.Stats
 import ru.palustris.music.core.model.Track
+import ru.palustris.music.core.prefs.WaveSettings
+import ru.palustris.music.data.MixesRepository
+import ru.palustris.music.data.Recommendations
+import ru.palustris.music.data.TasteRepository
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
 import ru.palustris.music.core.prefs.SettingsStore
@@ -45,6 +51,8 @@ data class HomeData(
   val top: List<Track> = emptyList(),
   val region: String = "RU",
   val history: List<HistoryItem> = emptyList(),
+  /** Минуты и главный исполнитель за неделю: короткая плашка со ссылкой на статистику. */
+  val week: Stats? = null,
 )
 
 data class HomeUi(
@@ -71,6 +79,9 @@ constructor(
   private val api: MusicApi,
   private val files: OfflineFiles,
   private val settings: SettingsStore,
+  private val recs: Recommendations,
+  private val mixesRepo: MixesRepository,
+  private val taste: TasteRepository,
   history: HistoryRepository,
   account: AccountRepository,
   library: LibraryRepository,
@@ -81,6 +92,23 @@ constructor(
   val ui: StateFlow<HomeUi> = _ui.asStateFlow()
 
   val me: StateFlow<Me?> = account.me
+
+  /** Миксы дня, забытые лайки и «на повторе»; скрытое пропадает сразу. */
+  val mixes: StateFlow<Mixes?> =
+    combine(mixesRepo.mixes, taste.state) { m, _ ->
+        m?.let {
+          it.copy(
+            mixes = it.mixes.map { mix -> mix.copy(tracks = mix.tracks.filterNot(taste::isHidden)) },
+            forgotten = it.forgotten.filterNot(taste::isHidden),
+            repeat = it.repeat.filterNot(taste::isHidden),
+          )
+        }
+      }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+  val wave: StateFlow<WaveSettings> =
+    settings.settings.map { it?.wave ?: WaveSettings() }.distinctUntilChanged()
+      .stateIn(viewModelScope, SharingStarted.Eagerly, settings.current.wave)
 
   val library: StateFlow<HomeLibrary> =
     combine(library.likes, playlists.list, storage.downloads) { likes, pls, dls ->
@@ -101,6 +129,8 @@ constructor(
     }
     // Сменили страну на экране чарта: обновляем и блок на главной.
     viewModelScope.launch { region.drop(1).collect { refreshTop(it) } }
+    // Сменили настройки волны: превью на карточке — уже из новой волны.
+    viewModelScope.launch { wave.drop(1).collect { w -> recs.wave(w).onSuccess { list -> _ui.update { it.copy(data = it.data.copy(wave = list)) } } } }
     // Историю очистили в «Моей музыке»: «Недавно играло» пустеет сразу, и в копии на телефоне тоже.
     viewModelScope.launch {
       history.cleared.collect {
@@ -119,19 +149,22 @@ constructor(
     coroutineScope {
       _ui.update { it.copy(refreshing = true) }
       val r = region.value
-      val wave = async { apiCall { api.wave() } }
-      val recs = async { apiCall { api.recs() } }
+      val wave = async { recs.wave() }
+      val forYou = async { apiCall { api.recs() }.map { l -> l.filterNot(taste::isHidden) } }
       val top = async { apiCall { api.top(r.ifEmpty { null }) } }
       val history = async { apiCall { api.history(20) } }
-      val results = listOf(wave.await(), recs.await(), top.await(), history.await())
+      val week = async { apiCall { api.stats("week", tzMinutes()) } }
+      launch { mixesRepo.refresh() }
+      val results = listOf(wave.await(), forYou.await(), top.await(), history.await())
       val old = _ui.value.data
       val data =
         HomeData(
           wave = wave.await().getOrNull()?.takeIf { it.isNotEmpty() } ?: old.wave,
-          recs = recs.await().getOrNull()?.takeIf { it.isNotEmpty() } ?: old.recs,
+          recs = forYou.await().getOrNull()?.takeIf { it.isNotEmpty() } ?: old.recs,
           top = top.await().getOrNull() ?: old.top,
           region = if (top.await().isSuccess) r else old.region,
           history = history.await().getOrNull() ?: old.history,
+          week = week.await().getOrNull() ?: old.week,
         )
       // Без сети падают все запросы разом, а один упавший из четырёх — это не «офлайн».
       val offline = results.all { it.isFailure }
@@ -148,9 +181,12 @@ constructor(
 
   /** Свежая волна при каждом запуске: сервер учитывает то, что слушали только что. */
   suspend fun freshWave(): Result<List<Track>> =
-    apiCall { api.wave() }.onSuccess { w -> _ui.update { it.copy(data = it.data.copy(wave = w)) } }
+    recs.wave().onSuccess { w -> _ui.update { it.copy(data = it.data.copy(wave = w)) } }
 
   private companion object {
     const val FILE = "home.json"
   }
 }
+
+/** Сдвиг местного времени от UTC в минутах: статистика считает часы и дни по-местному. */
+fun tzMinutes(): Int = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000

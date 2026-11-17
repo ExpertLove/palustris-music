@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.LibraryAdd
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -128,7 +129,11 @@ fun ArtistScreen(id: String?, name: String, contentPadding: PaddingValues, onBac
             coverShape = CircleShape,
           )
         }
-        item { PlayActions(a.tracks) }
+        item {
+          PlayActions(a.tracks) {
+            ru.palustris.music.ui.common.FilledTonalTextButton("Радио", { actions.artistRadio(a.id, a.name) }, Icons.Rounded.Radio)
+          }
+        }
         if (a.description.isNotBlank()) {
           item {
             Text(

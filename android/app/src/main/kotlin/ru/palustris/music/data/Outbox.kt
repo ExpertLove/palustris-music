@@ -24,7 +24,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import retrofit2.HttpException
 import ru.palustris.music.core.AppScope
+import ru.palustris.music.core.model.ArtistNameBody
 import ru.palustris.music.core.model.IdsBody
+import ru.palustris.music.core.model.ListenBody
 import ru.palustris.music.core.model.NameBody
 import ru.palustris.music.core.model.Track
 import ru.palustris.music.core.net.MusicApi
@@ -37,8 +39,23 @@ sealed interface PendingOp {
 
   @Serializable @SerialName("unlike") data class Unlike(val id: String) : PendingOp
 
-  /** Трек дослушан: из истории сервер строит «Мою волну». */
-  @Serializable @SerialName("history") data class Listened(val track: Track) : PendingOp
+  /**
+   * Трек дослушан: из истории сервер строит «Мою волну». [at] — когда играл (unix, с; без сети
+   * прослушивание может уйти на сервер через часы), [secs] — сколько секунд на самом деле звучал.
+   */
+  @Serializable
+  @SerialName("history")
+  data class Listened(val track: Track, val at: Long = 0, val secs: Long = 0) : PendingOp
+
+  /** «Не нравится»: из рекомендаций пропадает трек, исполнитель становится реже. */
+  @Serializable @SerialName("dislike") data class Dislike(val track: Track) : PendingOp
+
+  @Serializable @SerialName("undislike") data class Undislike(val id: String) : PendingOp
+
+  /** «Не предлагать исполнителя». */
+  @Serializable @SerialName("block") data class BlockArtist(val name: String) : PendingOp
+
+  @Serializable @SerialName("unblock") data class UnblockArtist(val name: String) : PendingOp
 
   @Serializable @SerialName("pl.add") data class PlaylistAdd(val playlist: Long, val track: Track) : PendingOp
 
@@ -48,6 +65,9 @@ sealed interface PendingOp {
 
   @Serializable @SerialName("pl.rename") data class PlaylistRename(val playlist: Long, val name: String) : PendingOp
 }
+
+fun PendingOp.Listened.toBody() =
+  ListenBody(track.id, track.title, track.artist, track.album, track.duration, track.thumb, at, secs)
 
 val PendingOp.playlistId: Long?
   get() =
@@ -207,7 +227,11 @@ constructor(
       when (op) {
         is PendingOp.Like -> api.like(op.track.copy(why = null))
         is PendingOp.Unlike -> api.unlike(op.id)
-        is PendingOp.Listened -> api.history(op.track.copy(why = null))
+        is PendingOp.Listened -> api.history(op.toBody())
+        is PendingOp.Dislike -> api.dislike(op.track.copy(why = null))
+        is PendingOp.Undislike -> api.undislike(op.id)
+        is PendingOp.BlockArtist -> api.blockArtist(ArtistNameBody(op.name))
+        is PendingOp.UnblockArtist -> api.unblockArtist(ArtistNameBody(op.name))
         is PendingOp.PlaylistAdd -> api.addToPlaylist(op.playlist, op.track.copy(why = null))
         is PendingOp.PlaylistRemove -> api.removeFromPlaylist(op.playlist, op.trackId)
         is PendingOp.PlaylistOrder -> api.reorderPlaylist(op.playlist, IdsBody(op.ids))
@@ -259,6 +283,10 @@ constructor(
       when (op) {
         is PendingOp.Like -> if (removeLast { it is PendingOp.Unlike && it.id == op.track.id }) return
         is PendingOp.Unlike -> if (removeLast { it is PendingOp.Like && it.track.id == op.id }) return
+        is PendingOp.Dislike -> if (removeLast { it is PendingOp.Undislike && it.id == op.track.id }) return
+        is PendingOp.Undislike -> if (removeLast { it is PendingOp.Dislike && it.track.id == op.id }) return
+        is PendingOp.BlockArtist -> if (removeLast { it is PendingOp.UnblockArtist && it.name == op.name }) return
+        is PendingOp.UnblockArtist -> if (removeLast { it is PendingOp.BlockArtist && it.name == op.name }) return
         // Удаление уходит всегда: трек мог быть в плейлисте и до повторного добавления.
         is PendingOp.PlaylistRemove ->
           removeLast { it is PendingOp.PlaylistAdd && it.playlist == op.playlist && it.track.id == op.trackId }

@@ -40,6 +40,10 @@ data class Settings(
   val region: String? = null,
   /** Скорость воспроизведения в процентах (как на сайте: 0,75×–1,5×). Тон голоса не меняется. */
   val speedPercent: Int = 100,
+  /** Настройки «Моей волны». */
+  val wave: WaveSettings = WaveSettings(),
+  /** Обложка и фон плеера двигаются в такт музыке. */
+  val beatMotion: Boolean = true,
 ) {
   val speed: Float
     get() = speedPercent / 100f
@@ -55,6 +59,34 @@ data class Settings(
   }
 }
 
+/**
+ * Настройки «Моей волны», как в Яндекс Музыке: характер, настроение и занятие. Пустая строка —
+ * «любое». Значения — те, что понимает `/api/wave`.
+ */
+data class WaveSettings(val mode: String = "", val mood: String = "", val activity: String = "") {
+  val isDefault: Boolean
+    get() = mode.isEmpty() && mood.isEmpty() && activity.isEmpty()
+
+  /** Подпись на карточке волны: «Незнакомое · Спокойное». */
+  val label: String
+    get() =
+      listOfNotNull(MODES[mode]?.takeIf { mode.isNotEmpty() }, MOODS[mood], ACTIVITIES[activity]).joinToString(" · ")
+
+  companion object {
+    val MODES = linkedMapOf("" to "Всё сразу", "favorite" to "Любимое", "discover" to "Незнакомое", "popular" to "Популярное")
+    val MOODS = linkedMapOf("energetic" to "Бодрое", "happy" to "Весёлое", "calm" to "Спокойное", "sad" to "Грустное")
+    val ACTIVITIES =
+      linkedMapOf(
+        "wakeup" to "Просыпаюсь",
+        "road" to "В дороге",
+        "work" to "Работаю",
+        "workout" to "Тренируюсь",
+        "sleep" to "Засыпаю",
+        "party" to "Вечеринка",
+      )
+  }
+}
+
 @Singleton
 class SettingsStore
 @Inject
@@ -66,6 +98,10 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   private val crossfadeKey = intPreferencesKey("crossfade_sec")
   private val regionKey = stringPreferencesKey("chart_region")
   private val speedKey = intPreferencesKey("speed_percent")
+  private val waveModeKey = stringPreferencesKey("wave_mode")
+  private val waveMoodKey = stringPreferencesKey("wave_mood")
+  private val waveActivityKey = stringPreferencesKey("wave_activity")
+  private val beatKey = booleanPreferencesKey("beat_motion")
 
   /** `null`, пока DataStore не прочитан: кэш не должен чистить себя по лимиту по умолчанию. */
   val settings: StateFlow<Settings?> =
@@ -79,6 +115,13 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
           crossfadeSec = (p[crossfadeKey] ?: 0).coerceIn(0, Settings.CROSSFADE_OPTIONS_SEC.max()),
           region = p[regionKey],
           speedPercent = p[speedKey]?.takeIf { it in Settings.SPEED_OPTIONS_PERCENT } ?: 100,
+          wave =
+            WaveSettings(
+              mode = p[waveModeKey]?.takeIf { it in WaveSettings.MODES } ?: "",
+              mood = p[waveMoodKey]?.takeIf { it in WaveSettings.MOODS } ?: "",
+              activity = p[waveActivityKey]?.takeIf { it in WaveSettings.ACTIVITIES } ?: "",
+            ),
+          beatMotion = p[beatKey] ?: true,
         )
       }
       .stateIn(scope, SharingStarted.Eagerly, null)
@@ -99,4 +142,13 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   suspend fun setRegion(code: String) = context.settingsStore.edit { it[regionKey] = code }
 
   suspend fun setSpeed(percent: Int) = context.settingsStore.edit { it[speedKey] = percent }
+
+  suspend fun setWave(w: WaveSettings) =
+    context.settingsStore.edit {
+      it[waveModeKey] = w.mode
+      it[waveMoodKey] = w.mood
+      it[waveActivityKey] = w.activity
+    }
+
+  suspend fun setBeatMotion(on: Boolean) = context.settingsStore.edit { it[beatKey] = on }
 }

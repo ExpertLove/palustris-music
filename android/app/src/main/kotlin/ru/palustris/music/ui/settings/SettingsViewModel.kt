@@ -68,6 +68,8 @@ constructor(
 
   fun setNormalize(on: Boolean) = viewModelScope.launch { store.setNormalize(on) }
 
+  fun setBeatMotion(on: Boolean) = viewModelScope.launch { store.setBeatMotion(on) }
+
   fun setCrossfade(sec: Int) = viewModelScope.launch { store.setCrossfade(sec) }
 
   fun setSpeed(percent: Int) {

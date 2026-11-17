@@ -38,6 +38,11 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.QueuePlayNext
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.PersonOff
+import androidx.compose.material.icons.rounded.Radio
+import androidx.compose.material.icons.rounded.ThumbDown
+import androidx.compose.material.icons.rounded.ThumbDownOffAlt
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -234,20 +239,33 @@ fun TrackRow(
     trailing?.invoke()
     Box {
       IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "Ещё") }
-      TrackMenu(track, expanded = menu, onDismiss = { menu = false }, liked = track.id in marks.liked, dl = dl, actions = actions, extra = extra)
+      TrackMenu(
+        track,
+        expanded = menu,
+        onDismiss = { menu = false },
+        liked = track.id in marks.liked,
+        disliked = track.id in marks.disliked,
+        dl = dl,
+        actions = actions,
+        extra = extra,
+      )
     }
   }
 }
 
+/** Меню трека: очередь, плейлист, лайк, радио, загрузка, «не нравится». Есть и в полном плеере. */
 @Composable
-private fun TrackMenu(
+fun TrackMenu(
   track: Track,
   expanded: Boolean,
   onDismiss: () -> Unit,
   liked: Boolean,
+  disliked: Boolean,
   dl: TrackDownload?,
   actions: TrackActions,
-  extra: List<ExtraAction>,
+  extra: List<ExtraAction> = emptyList(),
+  /** В полном плеере очередь и «Исполнитель» есть и так. */
+  inPlayer: Boolean = false,
 ) {
   val nav = LocalNavigator.current
   DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = RoundedCornerShape(20.dp)) {
@@ -262,8 +280,11 @@ private fun TrackMenu(
           },
         )
       }
-    item("Играть следующим", Icons.Rounded.QueuePlayNext) { actions.playNext(track) }()
-    item("Добавить в очередь", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(track) }()
+    if (!inPlayer) {
+      item("Играть следующим", Icons.Rounded.QueuePlayNext) { actions.playNext(track) }()
+      item("Добавить в очередь", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(track) }()
+    }
+    item("Радио по треку", Icons.Rounded.Radio) { actions.startRadio(track) }()
     item("В плейлист", Icons.AutoMirrored.Rounded.PlaylistAdd) { nav.addToPlaylist(track) }()
     if (liked) item("Убрать из «Нравится»", Icons.Rounded.Favorite) { actions.toggleLike(track) }()
     else item("Нравится", Icons.Rounded.FavoriteBorder) { actions.toggleLike(track) }()
@@ -273,9 +294,13 @@ private fun TrackMenu(
       TrackDownload.State.Done -> item("Удалить с телефона", Icons.Rounded.Delete) { actions.removeDownload(track) }()
       else -> item("Отменить загрузку", Icons.Rounded.Delete) { actions.removeDownload(track) }()
     }
-    item("Исполнитель", Icons.Rounded.Person) { nav.openArtist(track.artistId, track.artist.substringBefore(',').trim()) }()
+    if (!inPlayer) item("Исполнитель", Icons.Rounded.Person) { nav.openArtist(track.artistId, track.artist.substringBefore(',').trim()) }()
     track.albumId?.let { album -> item("Альбом", Icons.Rounded.Album) { nav.openCollection(album) }() }
     extra.forEach { e -> item(e.title, e.icon, e.onClick)() }
+    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+    if (disliked) item("Убрать из «Не нравится»", Icons.Rounded.ThumbDown) { actions.dislike(track) }()
+    else item("Не нравится", Icons.Rounded.ThumbDownOffAlt) { actions.dislike(track) }()
+    item("Не предлагать исполнителя", Icons.Rounded.PersonOff) { actions.hideArtist(track) }()
   }
 }
 

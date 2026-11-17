@@ -5,6 +5,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.PATCH
 import retrofit2.http.PUT
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -33,6 +34,12 @@ import ru.palustris.music.core.model.RemovedResp
 import ru.palustris.music.core.model.ResendResp
 import ru.palustris.music.core.model.ShareResp
 import ru.palustris.music.core.model.SharedPlaylist
+import ru.palustris.music.core.model.ArtistNameBody
+import ru.palustris.music.core.model.Dislikes
+import ru.palustris.music.core.model.ListenBody
+import ru.palustris.music.core.model.Mixes
+import ru.palustris.music.core.model.Stats
+import ru.palustris.music.core.model.Wrapped
 
 /** Бэкенд music.palustris.ru, см. android/docs/API.md. */
 interface MusicApi {
@@ -58,7 +65,45 @@ interface MusicApi {
   /** Удаление аккаунта со всеми лайками, плейлистами и историей. */
   @DELETE("api/account") suspend fun deleteAccount()
 
-  @GET("api/wave") suspend fun wave(): List<Track>
+  /**
+   * «Моя волна». `mode`: favorite | discover | popular (пусто — всё вместе); `mood`: energetic | happy |
+   * calm | sad; `activity`: wakeup | road | work | workout | sleep | party; `region` — страна для «Популярного».
+   */
+  @GET("api/wave")
+  suspend fun wave(
+    @Query("mode") mode: String? = null,
+    @Query("mood") mood: String? = null,
+    @Query("activity") activity: String? = null,
+    @Query("region") region: String? = null,
+  ): List<Track>
+
+  /** Радио по треку: похожие песни (YouTube Music), без скрытого пользователем. */
+  @GET("api/radio")
+  suspend fun radio(@Query("id") id: String, @Query("title") title: String?, @Query("artist") artist: String?): List<Track>
+
+  /** Радио исполнителя: по browseId или по имени. */
+  @GET("api/radio")
+  suspend fun artistRadio(@Query("artistId") artistId: String?, @Query("artistName") artistName: String?): List<Track>
+
+  /** Миксы дня, забытые лайки, «на повторе». */
+  @GET("api/mixes") suspend fun mixes(): Mixes
+
+  @GET("api/dislikes") suspend fun dislikes(): Dislikes
+
+  /** «Не нравится»: трек пропадает из рекомендаций, лайк снимается. */
+  @POST("api/dislikes") suspend fun dislike(@Body track: Track)
+
+  @DELETE("api/dislikes/{id}") suspend fun undislike(@Path("id") id: String)
+
+  /** «Не предлагать исполнителя». */
+  @POST("api/blocked-artists") suspend fun blockArtist(@Body body: ArtistNameBody)
+
+  @HTTP(method = "DELETE", path = "api/blocked-artists", hasBody = true) suspend fun unblockArtist(@Body body: ArtistNameBody)
+
+  /** Статистика: `period` = week | month | year | all, `tz` — сдвиг от UTC в минутах. */
+  @GET("api/stats") suspend fun stats(@Query("period") period: String, @Query("tz") tz: Int): Stats
+
+  @GET("api/wrapped") suspend fun wrapped(@Query("year") year: Int?, @Query("tz") tz: Int): Wrapped
 
   /** Персональные рекомендации «Для вас». */
   @GET("api/recs") suspend fun recs(): List<Track>
@@ -68,8 +113,8 @@ interface MusicApi {
 
   @GET("api/search/all") suspend fun search(@Query("q") query: String): SearchAll
 
-  /** Только треки: для подборок по настроению. */
-  @GET("api/search") suspend fun searchTracks(@Query("q") query: String): List<Track>
+  /** Только треки. `kind = "songs"` — только песни (с длительностью, без клипов и часовых подборок). */
+  @GET("api/search") suspend fun searchTracks(@Query("q") query: String, @Query("kind") kind: String? = null): List<Track>
 
   @GET("api/likes") suspend fun likes(): List<Track>
 
@@ -77,7 +122,7 @@ interface MusicApi {
 
   @DELETE("api/likes/{id}") suspend fun unlike(@Path("id") id: String)
 
-  @POST("api/history") suspend fun history(@Body track: Track)
+  @POST("api/history") suspend fun history(@Body body: ListenBody)
 
   @POST("api/skip") suspend fun skip(@Body track: Track)
 

@@ -46,6 +46,8 @@ import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -89,10 +91,19 @@ import ru.palustris.music.ui.equalizer.EqualizerScreen
 import ru.palustris.music.ui.playlists.AddToPlaylistSheet
 import ru.palustris.music.ui.playlists.PlaylistScreen
 import ru.palustris.music.ui.home.HomeScreen
+import ru.palustris.music.ui.home.MixScreen
+import ru.palustris.music.ui.settings.HiddenScreen
+import ru.palustris.music.ui.stats.StatsScreen
+import ru.palustris.music.ui.stats.WrappedScreen
 import ru.palustris.music.ui.library.LibraryScreen
 import ru.palustris.music.ui.library.LibraryTab
 import ru.palustris.music.ui.player.FullPlayer
 import ru.palustris.music.ui.player.MiniPlayer
+import ru.palustris.music.ui.player.FlyingArtwork
+import ru.palustris.music.ui.player.PlayerBackHandler
+import ru.palustris.music.ui.player.playerSheet
+import ru.palustris.music.ui.player.rememberBeat
+import ru.palustris.music.ui.player.rememberPlayerSheetState
 import ru.palustris.music.ui.player.rememberArtworkSeed
 import ru.palustris.music.ui.search.SearchScreen
 import ru.palustris.music.ui.settings.SettingsScreen
@@ -124,6 +135,14 @@ import ru.palustris.music.ui.theme.MusicTheme
 
 /** Чужой плейлист по ссылке `https://music.palustris.ru/s/{slug}`. */
 @Serializable data class SharedKey(val slug: String) : NavKey
+
+@Serializable data class MixKey(val id: String) : NavKey
+
+@Serializable data object StatsKey : NavKey
+
+@Serializable data object WrappedKey : NavKey
+
+@Serializable data object HiddenKey : NavKey
 
 private enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
   Home("Главная", Icons.Outlined.Home, Icons.Rounded.Home),
@@ -168,7 +187,16 @@ private fun MainScaffold(vm: MainViewModel) {
   val pickFor by vm.pickPlaylistFor.collectAsStateWithLifecycle()
   val playlists by vm.playlists.collectAsStateWithLifecycle()
   val backStack = rememberNavBackStack(HomeKey)
-  var expanded by rememberSaveable { mutableStateOf(false) }
+  val sheet = rememberPlayerSheetState()
+  val beatOn by vm.beatMotion.collectAsStateWithLifecycle()
+  val beat =
+    rememberBeat(
+      vm.levels,
+      active = beatOn && sheet.visible,
+      playing = vm.player::isPlayingNow,
+      idHash = vm.player::currentIdHash,
+      position = vm.player::positionNow,
+    )
   val snackbar = remember { SnackbarHostState() }
   val density = LocalDensity.current
   var bottomHeight by remember { mutableStateOf(0.dp) }
@@ -177,7 +205,12 @@ private fun MainScaffold(vm: MainViewModel) {
   val notificationsPermission =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { /* без уведомления загрузка всё равно идёт */ }
 
-  LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it) } }
+  LaunchedEffect(Unit) {
+    vm.messages.collect { m ->
+      val r = snackbar.showSnackbar(m.text, actionLabel = m.action, duration = if (m.action != null) SnackbarDuration.Long else SnackbarDuration.Short)
+      if (r == SnackbarResult.ActionPerformed) m.onAction?.invoke()
+    }
+  }
   LaunchedEffect(Unit) {
     vm.askNotifications.collect {
       if (
@@ -189,8 +222,8 @@ private fun MainScaffold(vm: MainViewModel) {
     }
   }
   // Очередь закончилась и плеер пуст: полному плееру нечего показывать.
-  LaunchedEffect(playerState.track == null) { if (playerState.track == null) expanded = false }
-  BackHandler(enabled = expanded) { expanded = false }
+  LaunchedEffect(playerState.track == null) { if (playerState.track == null && sheet.expanded) sheet.collapse() }
+  PlayerBackHandler(sheet)
 
   val top = backStack.lastOrNull()
   // Вкладка подсвечивается по корню текущей ветки: страница исполнителя из поиска — это всё ещё «Поиск».
@@ -200,7 +233,9 @@ private fun MainScaffold(vm: MainViewModel) {
       is LibraryKey -> Tab.Library
       null -> Tab.Home
       else -> Tab.Home
-    }.takeIf { top !is SettingsKey && top !is EqualizerKey && top !is AccountKey }
+    }.takeIf { top !is SettingsKey && top !is EqualizerKey && top !is AccountKey && top !is WrappedKey && top !is HiddenKey }
+  // Итоги года — на весь экран: без мини-плеера и нижней панели.
+  val immersive = top is WrappedKey
   fun select(tab: Tab, libraryTab: LibraryTab = LibraryTab.Likes) {
     // «Главная» — корень; другие вкладки лежат поверх неё, и «назад» ведёт на главную.
     while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
@@ -212,7 +247,7 @@ private fun MainScaffold(vm: MainViewModel) {
   }
   val contentPadding = PaddingValues(bottom = bottomHeight + 12.dp)
   fun push(key: NavKey) {
-    expanded = false
+    if (sheet.expanded) sheet.collapse()
     if (backStack.lastOrNull() != key) backStack.add(key)
   }
   val navigator =
@@ -236,8 +271,16 @@ private fun MainScaffold(vm: MainViewModel) {
 
         override fun openSettings() = push(SettingsKey)
 
+        override fun openMix(id: String) = push(MixKey(id))
+
+        override fun openStats() = push(StatsKey)
+
+        override fun openWrapped() = push(WrappedKey)
+
+        override fun openHidden() = push(HiddenKey)
+
         override fun openLibrary(tab: LibraryTab) {
-          expanded = false
+          if (sheet.expanded) sheet.collapse()
           select(Tab.Library, tab)
         }
 
@@ -255,7 +298,7 @@ private fun MainScaffold(vm: MainViewModel) {
   val back: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) }
 
   CompositionLocalProvider(LocalTrackActions provides vm, LocalTrackMarks provides marks, LocalNavigator provides navigator) {
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().onSizeChanged { sheet.heightPx = it.height.toFloat().coerceAtLeast(1f) }) {
       NavDisplay(
         backStack = backStack,
         onBack = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) },
@@ -264,7 +307,13 @@ private fun MainScaffold(vm: MainViewModel) {
         popTransitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
         entryProvider =
           entryProvider {
-            entry<HomeKey> { HomeScreen(player = playerState, contentPadding = contentPadding, onToggle = vm::togglePlay) }
+            entry<HomeKey> {
+              HomeScreen(player = playerState, contentPadding = contentPadding, onToggle = vm::togglePlay, onWaveChange = vm::setWave)
+            }
+            entry<MixKey> { k -> MixScreen(k.id, contentPadding, onBack = back, onMessage = vm::message) }
+            entry<StatsKey> { StatsScreen(contentPadding, onBack = back) }
+            entry<WrappedKey> { WrappedScreen(onBack = back) }
+            entry<HiddenKey> { HiddenScreen(contentPadding, onBack = back) }
             entry<SearchKey> { SearchScreen(contentPadding) }
             entry<LibraryKey> { key ->
               LibraryScreen(contentPadding, initialTab = key.tab, onOpenSettings = { backStack.add(SettingsKey) }, onMessage = vm::message)
@@ -305,14 +354,15 @@ private fun MainScaffold(vm: MainViewModel) {
       Column(
         Modifier.align(Alignment.BottomCenter).onSizeChanged { bottomHeight = with(density) { it.height.toDp() } }
       ) {
-        SnackbarHost(snackbar, Modifier.padding(horizontal = 8.dp))
-        MiniPlayer(
+        if (!immersive) MiniPlayer(
           state = playerState,
           progress = progress,
           onToggle = vm::togglePlay,
           onNext = vm::next,
-          onExpand = { expanded = true },
+          onPrev = vm::previousTrack,
+          onExpand = sheet::expand,
           modifier = Modifier.padding(bottom = 8.dp),
+          sheet = sheet,
         )
         if (currentTab != null) {
           ShortNavigationBar {
@@ -326,21 +376,17 @@ private fun MainScaffold(vm: MainViewModel) {
               )
             }
           }
-        } else {
+        } else if (!immersive) {
           androidx.compose.foundation.layout.Spacer(Modifier.navigationBarsPadding())
         }
       }
 
-      AnimatedVisibility(
-        visible = expanded && playerState.track != null,
-        enter = slideInVertically(tween(380)) { it } + fadeIn(tween(200)),
-        exit = slideOutVertically(tween(300)) { it } + fadeOut(tween(300)),
-      ) {
+      if (sheet.visible && playerState.track != null) Box(Modifier.fillMaxSize().playerSheet(sheet)) {
         FullPlayer(
           playerState,
           progress,
           controls = vm,
-          onCollapse = { expanded = false },
+          onCollapse = sheet::collapse,
           sleep = sleep,
           onSleep = vm::setSleep,
           eqEnabled = eqEnabled,
@@ -349,8 +395,19 @@ private fun MainScaffold(vm: MainViewModel) {
             playerState.track?.let { t -> push(ArtistKey(t.artistId, t.artist.substringBefore(',').trim())) }
           },
           speedPercent = speedPercent,
+          sheet = sheet,
+          beat = beat.takeIf { beatOn },
         )
       }
+      // Обложка, перелетающая между мини-плеером и полным.
+      FlyingArtwork(sheet, playerState.track?.thumb)
+      // Сообщения — поверх всего, в том числе полного плеера: там тоже бывает «Отменить».
+      SnackbarHost(
+        snackbar,
+        Modifier.align(Alignment.BottomCenter)
+          .then(if (sheet.expanded) Modifier.navigationBarsPadding().padding(bottom = 8.dp) else Modifier.padding(bottom = bottomHeight))
+          .padding(horizontal = 8.dp),
+      )
 
       pickFor?.let { t ->
         AddToPlaylistSheet(

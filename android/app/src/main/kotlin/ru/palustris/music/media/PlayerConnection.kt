@@ -33,9 +33,14 @@ data class PlayerState(
   val shuffle: Boolean = false,
   val repeatMode: Int = Player.REPEAT_MODE_OFF,
   val hasNext: Boolean = false,
-  /** Откуда очередь, см. [QueueSource]. */
+  /**
+   * Откуда очередь, см. [QueueSource]. Если сейчас играет добавленное вручную, — источник очереди
+   * вокруг него: волна остаётся волной.
+   */
   val source: String? = null,
   val queue: List<Track> = emptyList(),
+  /** Источник каждого элемента [queue]: «Вы добавили» в очереди показываются отдельно. */
+  val sources: List<String?> = emptyList(),
   val index: Int = -1,
   /**
    * Что сыграет после текущего: индексы в [queue] в порядке воспроизведения. Без перемешивания это
@@ -152,6 +157,16 @@ class PlayerConnection @Inject constructor(@ApplicationContext private val conte
 
   fun previous() = withController { it.seekToPrevious() }
 
+  fun previousTrack() = withController { if (it.hasPreviousMediaItem()) it.seekToPreviousMediaItem() else it.seekTo(0) }
+
+  /** Позиция прямо сейчас: MediaController досчитывает её сам, без запроса к сервису. */
+  fun positionNow(): Long = controller?.currentPosition ?: 0
+
+  /** Хэш id текущего трека: так его помечает измеритель звука. */
+  fun currentIdHash(): Int = controller?.currentMediaItem?.mediaId?.hashCode() ?: 0
+
+  fun isPlayingNow(): Boolean = controller?.isPlaying == true
+
   fun seekTo(ms: Long) = withController { it.seekTo(ms) }
 
   fun skipTo(index: Int) = withController {
@@ -170,13 +185,42 @@ class PlayerConnection @Inject constructor(@ApplicationContext private val conte
       }
   }
 
+  /** Сразу после текущего, но после уже добавленных вручную: «следующими» играют в порядке добавления. */
   fun playNext(track: Track) = withController { c ->
     if (c.mediaItemCount == 0) play(listOf(track))
-    else c.addMediaItem(c.currentMediaItemIndex + 1, track.toMediaItem())
+    else {
+      var at = c.currentMediaItemIndex + 1
+      while (at < c.mediaItemCount && c.getMediaItemAt(at).queueSource == QueueSource.USER) at++
+      c.addMediaItem(at, track.toMediaItem(QueueSource.USER))
+    }
   }
 
   fun enqueue(track: Track) = withController { c ->
-    if (c.mediaItemCount == 0) play(listOf(track)) else c.addMediaItem(track.toMediaItem())
+    if (c.mediaItemCount == 0) play(listOf(track)) else c.addMediaItem(track.toMediaItem(QueueSource.USER))
+  }
+
+  /**
+   * Заменить всё после текущего трека (волна с новыми настройками). Добавленное вручную остаётся
+   * впереди.
+   */
+  fun replaceUpcoming(tracks: List<Track>, source: String) = withController { c ->
+    val cur = c.currentMediaItemIndex
+    if (cur == C.INDEX_UNSET) return@withController
+    val user = (cur + 1 until c.mediaItemCount).map { c.getMediaItemAt(it) }.filter { it.queueSource == QueueSource.USER }
+    val keep = (0..cur).mapTo(HashSet()) { c.getMediaItemAt(it).mediaId } + user.map { it.mediaId }
+    // Одной заменой: если убирать по одному, сервис увидит почти пустое «Далее» и догрузит
+    // старую волну, которая окажется в хвосте после новых треков.
+    c.replaceMediaItems(cur + 1, c.mediaItemCount, user + tracks.filter { it.id !in keep }.map { it.toMediaItem(source) })
+  }
+
+  /** Убрать из «Далее» треки, которые больше не нужны (например, скрытого исполнителя). */
+  fun removeUpcoming(predicate: (Track) -> Boolean) = withController { c ->
+    val cur = c.currentMediaItemIndex
+    var i = c.mediaItemCount - 1
+    while (i > cur) {
+      if (predicate(c.getMediaItemAt(i).toTrack())) c.removeMediaItem(i)
+      i--
+    }
   }
 
   /**
@@ -216,7 +260,11 @@ class PlayerConnection @Inject constructor(@ApplicationContext private val conte
   private fun sync(c: MediaController) {
     val prev = _state.value
     val items = (0 until c.mediaItemCount).map { c.getMediaItemAt(it) }
-    val queueChanged = items.size != prev.queue.size || items.indices.any { items[it].mediaId != prev.queue[it].id }
+    val queueChanged =
+      items.size != prev.queue.size ||
+        items.indices.any { items[it].mediaId != prev.queue[it].id || items[it].queueSource != prev.sources.getOrNull(it) }
+    val sources = if (queueChanged) items.map { it.queueSource } else prev.sources
+    val cur = c.currentMediaItemIndex
     _state.value =
       PlayerState(
         track = c.currentMediaItem?.toTrack(),
@@ -227,12 +275,23 @@ class PlayerConnection @Inject constructor(@ApplicationContext private val conte
         shuffle = c.shuffleModeEnabled,
         repeatMode = c.repeatMode,
         hasNext = c.hasNextMediaItem(),
-        source = c.currentMediaItem?.queueSource,
+        source = queueSourceAround(sources, cur),
         queue = if (queueChanged) items.map(MediaItem::toTrack) else prev.queue,
+        sources = sources,
         index = c.currentMediaItemIndex,
         upNext = upNextOf(c).let { if (it == prev.upNext) prev.upNext else it },
         error = c.playerError?.let(::describe),
       )
+  }
+
+  /** Источник очереди: у добавленного вручную — источник ближайшего трека до него. */
+  private fun queueSourceAround(sources: List<String?>, index: Int): String? {
+    var i = index
+    while (i >= 0 && i < sources.size) {
+      if (sources[i] != QueueSource.USER) return sources[i]
+      i--
+    }
+    return sources.getOrNull(index)
   }
 
   private fun upNextOf(c: MediaController): List<Int> {

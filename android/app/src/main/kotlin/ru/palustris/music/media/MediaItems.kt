@@ -7,9 +7,18 @@ import androidx.media3.common.MediaMetadata
 import ru.palustris.music.core.AppModule
 import ru.palustris.music.core.model.Track
 
-/** Откуда пришла очередь: «Моя волна» сама подгружает продолжение. */
+/** Откуда пришла очередь: «Моя волна» и радио сами подгружают продолжение. */
 object QueueSource {
   const val WAVE = "wave"
+  /** Радио по треку или исполнителю: продолжение — похожее на то, что играет сейчас. */
+  const val RADIO = "radio"
+  /** Добавлено вручную («Играть следующим», «В очередь»): в очереди отдельным блоком. */
+  const val USER = "user"
+  const val MIX = "mix"
+
+  /** Источники, которые подбирает сервер: там есть «не нравится» и объяснение «почему». */
+  fun isRecommended(source: String?): Boolean =
+    source == WAVE || source == RADIO || source?.startsWith(MIX) == true || source == "recs"
 }
 
 private const val EXTRA_TRACK = "track"
