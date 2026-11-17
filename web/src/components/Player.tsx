@@ -21,9 +21,9 @@ import { Link } from 'wouter'
 import { bigThumb, fmtTime } from '../lib/format'
 import { useMobile } from '../lib/hooks'
 import { engine } from '../player/engine'
-import { current, usePlayer } from '../player/store'
+import { current, isRecommended, usePlayer } from '../player/store'
 import { useUi } from '../store/ui'
-import { Cover, LikeButton, PlayFab, PlayIcon } from './common'
+import { Cover, DislikeButton, LikeButton, PlayFab, PlayIcon } from './common'
 import { Lyrics, Queue } from './LyricsQueue'
 import { Seek, Volume } from './Seek'
 import { ArtistLinks } from './TrackList'
@@ -79,6 +79,7 @@ export function Dock() {
   const openDialog = useUi((s) => s.openDialog)
   const setNP = useUi((s) => s.setNowPlaying)
   const openMenu = useUi((s) => s.openMenu)
+  const recommended = usePlayer((s) => isRecommended(s.source))
   if (!track) return null
   return (
     <div className="dock" role="region" aria-label="Плеер">
@@ -96,8 +97,9 @@ export function Dock() {
           <span className="a">
             <ArtistLinks track={track} stop={false} />
           </span>
-          {track.why && <span className="why ellipsis">{track.why}</span>}
+          {track.why && recommended && <span className="why ellipsis">{track.why}</span>}
         </div>
+        {recommended && <DislikeButton track={track} size={18} className="sm" />}
         <LikeButton track={track} size={19} />
       </div>
       <div className="dock-center">
@@ -132,7 +134,8 @@ export function Dock() {
           aria-label="Ещё"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
-            openMenu({ track, x: r.left - 200, y: r.top - 340, ctx: {} })
+            // Меню само встанет над кнопкой: внизу места нет.
+            openMenu({ track, x: r.left - 200, y: r.top - 8, ctx: {} })
           }}
         >
           <Ellipsis size={18} />
@@ -280,6 +283,7 @@ export function NowPlaying() {
   const eqOn = usePlayer((s) => s.eq.on)
   const sleep = usePlayer((s) => !!s.sleepAt || s.sleepEndOfTrack)
   const mobile = useMobile()
+  const recommended = isRecommended(source)
   const [tab, setTab] = useState<'queue' | 'lyrics'>('lyrics')
   const [mobileSide, setMobileSide] = useState(false)
   const [closing, setClosing] = useState(false)
@@ -326,7 +330,7 @@ export function NowPlaying() {
           <ChevronDown size={26} />
         </button>
         <div className="np-src">
-          <span>{source?.kind === 'wave' ? 'Играет' : 'Играет из'}</span>
+          <span>{source?.kind === 'wave' || source?.kind === 'radio' ? 'Играет' : 'Играет из'}</span>
           {source?.href ? (
             <Link href={source.href} onClick={close}>
               <b className="ellipsis">{source.title || 'очереди'}</b>
@@ -358,9 +362,12 @@ export function NowPlaying() {
               <div className="a ellipsis" onClick={close}>
                 <ArtistLinks track={track} stop={false} />
               </div>
-              {track.why && <div className="why">{track.why}</div>}
+              {track.why && recommended && <div className="why">{track.why}</div>}
             </div>
-            <LikeButton track={track} size={24} />
+            <div className="np-acts">
+              {recommended && <DislikeButton track={track} size={22} />}
+              <LikeButton track={track} size={24} />
+            </div>
           </div>
           <div className="np-seek">
             <Seek />

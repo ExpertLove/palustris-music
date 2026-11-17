@@ -1,7 +1,7 @@
-import { BookmarkPlus, Check, Ellipsis, Heart, Link2, ListEnd, Pencil, Search as SearchIcon, Share2, Shuffle, Trash2 } from 'lucide-react'
+import { BookmarkPlus, Check, Ellipsis, Heart, Link2, ListEnd, Pencil, Radio, Search as SearchIcon, Share2, Shuffle, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation, useParams } from 'wouter'
-import { AlbumCardView, ArtistCardView, Shelf } from '../components/Cards'
+import { AlbumCardView, ArtistCardView, MixCover, Shelf } from '../components/Cards'
 import { Collage, Cover, Empty, ErrorNote, PlayFab, RowsSkeleton } from '../components/common'
 import { Dialog, playlistChanged } from '../components/Overlays'
 import { TopBar } from '../components/Shell'
@@ -14,6 +14,7 @@ import type { Track } from '../lib/types'
 import { usePlayer, type Source } from '../player/store'
 import { useAuth } from '../store/auth'
 import { useLibrary } from '../store/library'
+import { useVisible } from '../store/taste'
 import { toast, useUi } from '../store/ui'
 
 /** Кнопка «играть/пауза» для коллекции: если сейчас играет она же — ставит паузу. */
@@ -168,6 +169,7 @@ export function ArtistPage({ byName }: { byName?: boolean }) {
           <div className="actions" style={{ marginTop: 18 }}>
             <CollectionPlay tracks={all ?? a.tracks} source={source} />
             <ShuffleBtn tracks={all ?? a.tracks} source={source} />
+            <ArtistRadioBtn id={a.id} name={a.name} />
           </div>
           <section>
             <div className="section-head">
@@ -225,6 +227,82 @@ export function ArtistPage({ byName }: { byName?: boolean }) {
           )}
         </div>
       )}
+    </>
+  )
+}
+
+/** Радио исполнителя: он сам и похожие, бесконечно. */
+function ArtistRadioBtn({ id, name }: { id: string; name: string }) {
+  const start = usePlayer((s) => s.startArtistRadio)
+  const [busy, setBusy] = useState(false)
+  return (
+    <button
+      className="btn btn-ghost"
+      disabled={busy}
+      title="Исполнитель и похожие на него, без конца"
+      onClick={async () => {
+        setBusy(true)
+        await start({ id, name, href: `/artist/${id}` })
+        setBusy(false)
+      }}
+    >
+      <Radio size={18} /> {busy ? 'Подбираю…' : 'Радио'}
+    </button>
+  )
+}
+
+// ───────── Микс дня ─────────
+export function MixPage() {
+  const { id } = useParams<{ id: string }>()
+  const res = useAsync('mixes', () => api.mixes(), 10 * 60_000)
+  const openDialog = useUi((s) => s.openDialog)
+  const index = res.data?.mixes.findIndex((m) => m.id === id) ?? -1
+  const mix = index >= 0 ? res.data!.mixes[index] : null
+  const tracks = useVisible(mix?.tracks)
+  const source: Source = { kind: 'mix', title: mix?.title ?? 'Микс дня', href: `/mix/${id}` }
+  return (
+    <>
+      <TopBar title={mix?.title} />
+      <div className="main-inner">
+        {res.error && <ErrorNote text={res.error} retry={res.reload} />}
+        {res.loading && !res.data && <RowsSkeleton />}
+        {res.data && !mix && (
+          <Empty icon={<Sparkles size={26} />} title="Микс обновился" text="Миксы дня собираются заново каждую ночь. Загляни на главную.">
+            <Link href="/" className="btn btn-light">
+              На главную
+            </Link>
+          </Empty>
+        )}
+        {mix && (
+          <>
+            <Hero
+              art={<MixCover mix={mix} index={index} />}
+              kind="Микс дня · обновляется каждую ночь"
+              title={mix.title}
+              sub={
+                <>
+                  <b>{mix.sub}</b>
+                  <span>{tracksWord(tracks.length)}</span>
+                  {dur(tracks) > 0 && <span>{totalDuration(dur(tracks))}</span>}
+                </>
+              }
+            />
+            <div className="actions">
+              <CollectionPlay tracks={tracks} source={source} />
+              <ShuffleBtn tracks={tracks} source={source} />
+              <button
+                className="icon-btn lg"
+                title="Сохранить в мои плейлисты"
+                aria-label="Сохранить в мои плейлисты"
+                onClick={() => openDialog({ kind: 'new-playlist', tracks, name: `${mix.title} · ${mix.sub.split(' и ')[0]}` })}
+              >
+                <BookmarkPlus size={24} />
+              </button>
+            </div>
+            <TrackList tracks={tracks} source={source} head showAlbum />
+          </>
+        )}
+      </div>
     </>
   )
 }

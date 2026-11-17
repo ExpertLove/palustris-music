@@ -1,18 +1,36 @@
 import { create } from 'zustand'
 import { api } from '../lib/api'
-import { EQ_PRESETS } from '../lib/data'
+import { EQ_PRESETS, getRegion, loadWaveSettings, saveWaveSettings } from '../lib/data'
 import { bigThumb, shuffled } from '../lib/format'
-import type { Track } from '../lib/types'
+import type { Track, WaveSettings } from '../lib/types'
 import { toast } from '../store/ui'
 import { engine, isIOS } from './engine'
 import { levelOf, requestLoudness } from './loudness'
 
 export type Repeat = 'off' | 'all' | 'one'
 
+/** Откуда очередь: волна и радио бесконечные, микс — подборка сервера, список — всё остальное. */
 export interface Source {
-  kind: 'wave' | 'list'
+  kind: 'wave' | 'list' | 'radio' | 'mix'
   title: string
   href?: string
+}
+
+/** Рекомендации: тут уместны «Не нравится» рядом с лайком и объяснение, почему трек здесь. */
+export const isRecommended = (s: Source | null | undefined) => !!s && (s.kind === 'wave' || s.kind === 'radio' || s.kind === 'mix')
+
+/** Скрытое пользователем («Не нравится», скрытые исполнители): проверку подключает `store/taste`,
+ *  чтобы модули не ссылались друг на друга. */
+let isHidden: (t: Track) => boolean = () => false
+export const setHiddenCheck = (fn: (t: Track) => boolean) => {
+  isHidden = fn
+}
+
+/** Объяснение «почему в подборке» не тащим за треком в другие очереди. */
+const plain = (t: Track): Track => {
+  const { why: _why, ...rest } = t
+  void _why
+  return rest
 }
 
 export interface EqState {
@@ -45,10 +63,24 @@ interface PlayerState {
   /** Сколько треков пользователь поставил «в очередь» сразу после текущего. */
   queued: number
   unshuffled: Track[] | null
+  /** Настройки «Моей волны»: характер, настроение, занятие. */
+  waveSettings: WaveSettings
 
   playList: (list: Track[], start?: number, source?: Source) => void
   playTrack: (t: Track, list?: Track[], source?: Source) => void
   startWave: () => Promise<void>
+  /** Новые настройки волны. Если она играет, всё впереди сразу пересобирается. */
+  setWaveSettings: (w: WaveSettings) => Promise<void>
+  /** Бесконечное радио: похожее на этот трек. */
+  startRadio: (t: Track) => Promise<void>
+  /** Радио исполнителя: он сам и похожие. */
+  startArtistRadio: (p: { id?: string | null; name: string; href?: string }) => Promise<void>
+  /** Заменить всё впереди одним разом: текущий трек доигрывает. */
+  replaceUpcoming: (list: Track[], source?: Source) => void
+  /** Убрать из очереди впереди всё, что подходит под условие. */
+  removeUpcoming: (pred: (t: Track) => boolean) => void
+  /** Следующий трек без «пропуска» и без повтора трека: после «Не нравится». */
+  skipCurrent: () => void
   toggle: () => void
   play: () => void
   pause: () => void
@@ -82,8 +114,40 @@ let startedAt = 0
 let preloadedFor = ''
 let fadedFrom = ''
 let refilling = false
+let lastExtend = 0
 let errorsInRow = 0
 let prefetchedFor = ''
+/** Пропуски подряд в волне: после двух она перестраивается, как в приложении. */
+let skipsInRow = 0
+
+// ───────────── прослушивания ─────────────
+// В историю трек уходит, когда перестал играть, вместе с тем, сколько секунд он на самом деле звучал:
+// по ним сервер считает минуты в статистике и долю дослушанного в рекомендациях. Перемотка не считается.
+interface Listen {
+  track: Track
+  at: number
+  secs: number
+  pos: number
+  dur: number
+}
+let listen: Listen | null = null
+
+const enough = (l: Listen) => l.secs >= Math.min(30, (l.dur || 60) / 2)
+
+/** Выход из аккаунта: недослушанное не должно уйти в историю следующего. */
+export const dropListen = () => {
+  listen = null
+}
+
+/** Догрузка волны или радио; назначается внутри хранилища. */
+let extendQueue: () => Promise<void> = async () => {}
+
+function finishListen(keepalive = false) {
+  const l = listen
+  listen = null
+  if (!l || !enough(l)) return
+  api.addHistory({ ...l.track, duration: Math.round(l.dur || l.track.duration) }, l.at, Math.round(l.secs), keepalive).catch(() => null)
+}
 
 export const current = (s: Pick<PlayerState, 'queue' | 'index'>) => s.queue[s.index] ?? null
 
@@ -112,19 +176,37 @@ export const usePlayer = create<PlayerState>((set, get) => {
     return null
   }
 
-  const refillWave = async () => {
-    if (refilling) return
+  /** Волна и радио бесконечные: догружаем продолжение. Радио — похожее на то, что играет сейчас,
+   *  так оно плавно дрейфует. */
+  const extend = async () => {
+    const s = get()
+    const cur = current(s)
+    const radio = s.source?.kind === 'radio'
+    if (refilling || !cur || (!s.wave && !radio)) return
     refilling = true
+    lastExtend = Date.now()
     try {
-      const fresh = await api.wave()
+      const fresh = s.wave ? await api.wave(s.waveSettings, getRegion()) : await api.radio(cur)
       const have = new Set(get().queue.map((t) => t.id))
-      const add = fresh.filter((t) => !have.has(t.id))
+      const add = fresh.filter((t) => !have.has(t.id) && !isHidden(t))
       if (add.length) set({ queue: [...get().queue, ...add] })
     } catch {
       /* попробуем позже */
     } finally {
       refilling = false
     }
+  }
+
+  extendQueue = extend
+
+  /** Два пропуска подряд — волна не попадает: сервер уже знает о пропусках, берём свежую. */
+  const rebuildWaveAhead = async () => {
+    const s = get()
+    const cur = current(s)
+    if (!s.wave || !cur) return
+    const fresh = await api.wave(s.waveSettings, getRegion()).catch(() => [] as Track[])
+    if (fresh.length < 5 || !get().wave || current(get())?.id !== cur.id) return
+    get().replaceUpcoming(fresh)
   }
 
   const go = (i: number, autoplay = true) => {
@@ -155,6 +237,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     sleepEndOfTrack: false,
     queued: 0,
     unshuffled: null,
+    waveSettings: loadWaveSettings(),
 
     playList: (list, start = 0, source) => {
       list = dedupe(list)
@@ -167,6 +250,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
         index = 0
       }
       errorsInRow = 0
+      skipsInRow = 0
       set({
         queue,
         index,
@@ -193,7 +277,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       engine.ensureGraph()
       set({ buffering: true })
       try {
-        let list = await api.wave()
+        let list = (await api.wave(get().waveSettings, getRegion())).filter((t) => !isHidden(t))
         if (!list.length) list = await api.top('')
         if (get().shuffle) set({ shuffle: false })
         get().playList(list, 0, { kind: 'wave', title: 'Моя волна', href: '/' })
@@ -201,6 +285,94 @@ export const usePlayer = create<PlayerState>((set, get) => {
         set({ buffering: false })
         toast((e as Error).message)
       }
+    },
+
+    setWaveSettings: async (w) => {
+      saveWaveSettings(w)
+      set({ waveSettings: w })
+      const s = get()
+      if (!s.wave || !current(s)) return
+      try {
+        const list = (await api.wave(w, getRegion())).filter((t) => !isHidden(t))
+        // Пока ждали ответ, настройки могли поменять ещё раз — тогда перестроит последний вызов.
+        if (!list.length || get().waveSettings !== w || !get().wave) return
+        get().replaceUpcoming(list)
+        toast('Волна перестроена')
+      } catch (e) {
+        toast((e as Error).message)
+      }
+    },
+
+    startRadio: async (t) => {
+      try {
+        const list = (await api.radio(t)).filter((x) => x.id !== t.id && !isHidden(x))
+        if (!list.length) return toast('Для этого трека радио не нашлось')
+        const source: Source = { kind: 'radio', title: `Радио «${t.title}»` }
+        // Трек уже играет: он доигрывает, а дальше идёт радио.
+        if (current(get())?.id === t.id) {
+          if (get().shuffle) set({ shuffle: false, unshuffled: null })
+          get().replaceUpcoming(list, source)
+        } else {
+          if (get().shuffle) set({ shuffle: false })
+          get().playList([plain(t), ...list], 0, source)
+        }
+        toast(`Радио «${t.title}»`)
+      } catch (e) {
+        toast((e as Error).message || 'Не получилось включить радио')
+      }
+    },
+
+    startArtistRadio: async ({ id, name, href }) => {
+      engine.ensureGraph()
+      try {
+        const list = (await api.artistRadio(id ? { artistId: id } : { artistName: name })).filter((x) => !isHidden(x))
+        if (!list.length) return toast('Радио не нашлось')
+        if (get().shuffle) set({ shuffle: false })
+        get().playList(list, 0, { kind: 'radio', title: `Радио: ${name}`, href })
+      } catch (e) {
+        toast((e as Error).message || 'Не получилось включить радио')
+      }
+    },
+
+    replaceUpcoming: (list, source) => {
+      const s = get()
+      const cur = current(s)
+      if (!cur) return
+      const kept = s.queue.slice(0, s.index + 1)
+      const have = new Set(kept.map((t) => t.id))
+      const fresh = dedupe(list).filter((t) => !have.has(t.id))
+      // Одной заменой: если убирать по одному, пустое «Далее» догрузило бы старую волну.
+      set({
+        queue: [...kept, ...fresh],
+        queued: 0,
+        unshuffled: null,
+        ...(source ? { source, wave: source.kind === 'wave' } : {}),
+      })
+      preloadedFor = ''
+      prefetchedFor = ''
+    },
+
+    removeUpcoming: (pred) => {
+      const s = get()
+      if (s.index < 0) return
+      const ahead = s.queue.slice(s.index + 1)
+      const userPart = ahead.slice(0, s.queued).filter((t) => !pred(t))
+      const rest = ahead.slice(s.queued).filter((t) => !pred(t))
+      if (userPart.length + rest.length === ahead.length) return
+      set({ queue: [...s.queue.slice(0, s.index + 1), ...userPart, ...rest], queued: userPart.length })
+      preloadedFor = ''
+    },
+
+    skipCurrent: () => {
+      const s = get()
+      if (s.index + 1 < s.queue.length) return go(s.index + 1)
+      if (s.wave || s.source?.kind === 'radio') {
+        void extend().then(() => {
+          if (get().index + 1 < get().queue.length) go(get().index + 1)
+        })
+        return
+      }
+      engine.pause()
     },
 
     toggle: () => {
@@ -220,17 +392,30 @@ export const usePlayer = create<PlayerState>((set, get) => {
       const s = get()
       const cur = current(s)
       if (user && cur && !counted && engine.time < 20 && Date.now() - startedAt > 1500) {
-        api.skip(cur).catch(() => null)
+        let rebuild = false
+        if (s.wave) {
+          skipsInRow++
+          rebuild = skipsInRow >= 2
+          if (rebuild) skipsInRow = 0
+        }
+        // Сначала пропуск доходит до сервера, потом свежая волна учитывает его.
+        api
+          .skip(cur)
+          .catch(() => null)
+          .then(() => {
+            if (rebuild) void rebuildWaveAhead()
+          })
       }
       if (!user && s.repeat === 'one' && cur) {
+        finishListen()
         engine.seek(0)
         engine.play()
         return
       }
       const n = nextIndex()
       if (n === null) {
-        if (s.wave) {
-          void refillWave().then(() => {
+        if (s.wave || s.source?.kind === 'radio') {
+          void extend().then(() => {
             if (get().index + 1 < get().queue.length) go(get().index + 1)
           })
           return
@@ -347,7 +532,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     clearUpcoming: () => {
       const s = get()
-      set({ queue: s.queue.slice(0, s.index + 1), queued: 0, wave: false })
+      // Волна и радио после «Очистить» больше не догружаются: человек сам решил, что играть дальше.
+      const source = s.source?.kind === 'radio' ? { ...s.source, kind: 'list' as const } : s.source
+      set({ queue: s.queue.slice(0, s.index + 1), queued: 0, wave: false, source })
     },
 
     setEq: (p) => {
@@ -402,10 +589,19 @@ engine.setHandlers({
     const cur = current(s)
     usePlayer.setState({ time: t, duration: Number.isFinite(d) && d > 0 ? d : s.duration })
     if (!cur) return
-    // В историю — после 30 секунд или половины трека.
-    if (!counted && (t >= 30 || (d > 0 && t >= d / 2))) {
+    // Прослушивание: считаем только плавный ход вперёд, перемотка и паузы не в счёт.
+    if (listen?.track.id !== cur.id) {
+      finishListen()
+      listen = { track: cur, at: Math.floor(Date.now() / 1000), secs: 0, pos: t, dur: d > 0 ? d : cur.duration }
+    } else {
+      const step = t - listen.pos
+      if (step > 0 && step < 2.5 && !engine.paused) listen.secs += step / (s.rate || 1)
+      listen.pos = t
+      if (d > 0) listen.dur = d
+    }
+    if (!counted && (enough(listen) || (d > 0 && t >= d / 2 && listen.secs >= 10))) {
       counted = true
-      api.addHistory({ ...cur, duration: Math.round(d || cur.duration) }).catch(() => null)
+      skipsInRow = 0
     }
     const left = d > 0 ? d - t : Infinity
     const nIdx = s.index + 1 < s.queue.length ? s.index + 1 : s.repeat === 'all' ? 0 : -1
@@ -418,6 +614,7 @@ engine.setHandlers({
     if (nxt && s.crossfade > 0 && left <= s.crossfade && left > 0.4 && fadedFrom !== cur.id && !s.sleepEndOfTrack) {
       fadedFrom = cur.id
       if (engine.crossfadeTo(nxt, Math.min(s.crossfade, left))) {
+        finishListen()
         counted = false
         startedAt = Date.now()
         preloadedFor = ''
@@ -425,20 +622,7 @@ engine.setHandlers({
         updateMediaSession(nxt)
       }
     }
-    if (s.wave && s.index >= s.queue.length - 3 && !refilling) {
-      refilling = true
-      api
-        .wave()
-        .then((fresh) => {
-          const have = new Set(usePlayer.getState().queue.map((x) => x.id))
-          const add = fresh.filter((x) => !have.has(x.id))
-          if (add.length) usePlayer.setState({ queue: [...usePlayer.getState().queue, ...add] })
-        })
-        .catch(() => null)
-        .finally(() => {
-          window.setTimeout(() => (refilling = false), 20_000)
-        })
-    }
+    if ((s.wave || s.source?.kind === 'radio') && s.index >= s.queue.length - 3 && Date.now() - lastExtend > 20_000) void extendQueue()
     if (s.sleepAt && Date.now() >= s.sleepAt) {
       engine.pause()
       usePlayer.setState({ sleepAt: null })
@@ -620,5 +804,9 @@ export function restorePlayer() {
       save()
     }, 2000)
   })
-  window.addEventListener('pagehide', save)
+  window.addEventListener('pagehide', () => {
+    save()
+    // Вкладку закрывают на середине трека: слушанное всё равно уходит в историю.
+    finishListen(true)
+  })
 }

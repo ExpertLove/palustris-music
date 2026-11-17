@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useLocation } from 'wouter'
 import { applyPalette, DEFAULT_PALETTE, paletteFor } from '../lib/color'
 import { useLibrary } from '../store/library'
+import { useTaste } from '../store/taste'
 import { useUi } from '../store/ui'
 import { engine } from './engine'
 import { current, usePlayer } from './store'
@@ -58,6 +59,7 @@ export function useHotkeys() {
         p.setVolume(Math.max(0, p.volume - 0.05))
       } else if (k === 'm' || k === 'ь') p.toggleMute()
       else if ((k === 'l' || k === 'д') && t) void useLibrary.getState().toggleLike(t)
+      else if ((k === 'd' || k === 'в') && t) void useTaste.getState().toggleDislike(t)
       else if (k === 's' || k === 'ы') p.toggleShuffle()
       else if (k === 'r' || k === 'к') p.cycleRepeat()
       else if (k === 'f' || k === 'а') t && ui.setNowPlaying(!ui.nowPlaying)

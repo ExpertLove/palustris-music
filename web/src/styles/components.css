@@ -249,6 +249,8 @@
 .np-info .a { font-size: 17px; color: var(--ink-2); font-weight: 550; }
 .np-info .a:hover { color: var(--ink); }
 .np-info .why { font-size: 13px; color: var(--accent); margin-top: 4px; }
+.np-acts { display: flex; align-items: center; gap: 2px; }
+.icon-btn.dislike.on { color: var(--ink); }
 .np-seek { width: min(100%, 520px); display: grid; gap: 4px; }
 .np-seek .times { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .np-seek .seek { height: 22px; }

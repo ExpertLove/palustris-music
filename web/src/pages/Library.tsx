@@ -1,4 +1,4 @@
-import { Heart, History, MicVocal, Plus, Trash2 } from 'lucide-react'
+import { BarChart3, Heart, History, MicVocal, Plus, Trash2 } from 'lucide-react'
 import { Link, useLocation, useSearch } from 'wouter'
 import { MediaCard } from '../components/Cards'
 import { Collage, Cover, Empty, RowsSkeleton } from '../components/common'
@@ -25,6 +25,10 @@ export default function Library() {
           <h1 className="page-title" style={{ margin: 0 }}>
             Медиатека
           </h1>
+          <span style={{ flex: 1 }} />
+          <Link href="/stats" className="btn btn-ghost btn-sm">
+            <BarChart3 size={16} /> Статистика
+          </Link>
           <div className="seg" role="tablist">
             <button role="tab" aria-selected={tab === 'playlists'} onClick={() => setTab('playlists')}>
               Плейлисты

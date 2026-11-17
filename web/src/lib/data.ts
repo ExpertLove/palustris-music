@@ -1,6 +1,14 @@
 import {
   AudioWaveform,
+  BedDouble,
   Car,
+  Compass,
+  Droplet,
+  Dumbbell,
+  Infinity as InfinityIcon,
+  Laptop,
+  Smile,
+  TrendingUp,
   CloudRain,
   Clapperboard,
   Disc3,
@@ -29,6 +37,7 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react'
+import type { WaveSettings } from './types'
 
 export interface Mood {
   id: string
@@ -113,6 +122,66 @@ export const REGIONS: { code: string; title: string }[] = [
   { code: 'CA', title: 'Канада' },
   { code: 'AU', title: 'Австралия' },
 ]
+
+// ───────── Настройки «Моей волны» (как в приложении) ─────────
+
+export interface WaveOption<K extends string> {
+  id: K
+  title: string
+  icon: LucideIcon
+}
+
+export const WAVE_MODES: WaveOption<WaveSettings['mode']>[] = [
+  { id: '', title: 'Всё сразу', icon: InfinityIcon },
+  { id: 'favorite', title: 'Любимое', icon: Heart },
+  { id: 'discover', title: 'Незнакомое', icon: Compass },
+  { id: 'popular', title: 'Популярное', icon: TrendingUp },
+]
+
+export const WAVE_MOODS: WaveOption<WaveSettings['mood']>[] = [
+  { id: 'energetic', title: 'Бодрое', icon: Zap },
+  { id: 'happy', title: 'Весёлое', icon: Smile },
+  { id: 'calm', title: 'Спокойное', icon: Leaf },
+  { id: 'sad', title: 'Грустное', icon: Droplet },
+]
+
+export const WAVE_ACTIVITIES: WaveOption<WaveSettings['activity']>[] = [
+  { id: 'wakeup', title: 'Просыпаюсь', icon: Sunrise },
+  { id: 'road', title: 'В дороге', icon: Car },
+  { id: 'work', title: 'Работаю', icon: Laptop },
+  { id: 'workout', title: 'Тренируюсь', icon: Dumbbell },
+  { id: 'sleep', title: 'Засыпаю', icon: BedDouble },
+  { id: 'party', title: 'Вечеринка', icon: PartyPopper },
+]
+
+export const DEFAULT_WAVE: WaveSettings = { mode: '', mood: '', activity: '' }
+export const isDefaultWave = (w: WaveSettings) => !w.mode && !w.mood && !w.activity
+
+/** Подпись на карточке волны: «Незнакомое · Спокойное». */
+export function waveLabel(w: WaveSettings): string {
+  return [w.mode && WAVE_MODES.find((m) => m.id === w.mode)?.title, WAVE_MOODS.find((m) => m.id === w.mood)?.title, WAVE_ACTIVITIES.find((m) => m.id === w.activity)?.title]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+const WAVE_KEY = 'music.wave.v1'
+export function loadWaveSettings(): WaveSettings {
+  try {
+    const w = JSON.parse(localStorage.getItem(WAVE_KEY) || 'null') as Partial<WaveSettings> | null
+    return {
+      mode: WAVE_MODES.some((m) => m.id === w?.mode) ? w!.mode! : '',
+      mood: WAVE_MOODS.some((m) => m.id === w?.mood) ? w!.mood! : '',
+      activity: WAVE_ACTIVITIES.some((m) => m.id === w?.activity) ? w!.activity! : '',
+    }
+  } catch {
+    return { ...DEFAULT_WAVE }
+  }
+}
+export const saveWaveSettings = (w: WaveSettings) => localStorage.setItem(WAVE_KEY, JSON.stringify(w))
+
+/** Цвет полосы микса дня: свой у каждого номера, как в приложении. */
+export const MIX_COLORS = ['#7b47e8', '#e0612f', '#1690a8', '#d8336f', '#2c9a52', '#c08a1c']
+export const mixColor = (i: number) => MIX_COLORS[((i % MIX_COLORS.length) + MIX_COLORS.length) % MIX_COLORS.length]
 
 const REGION_KEY = 'music.region'
 export function getRegion(): string {

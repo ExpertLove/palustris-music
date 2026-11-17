@@ -25,7 +25,8 @@ export type Dialog =
   | { kind: 'eq' }
   | { kind: 'sleep' }
   | { kind: 'shortcuts' }
-  | { kind: 'new-playlist'; track?: Track; tracks?: Track[] }
+  | { kind: 'wave' }
+  | { kind: 'new-playlist'; track?: Track; tracks?: Track[]; name?: string }
   | { kind: 'add-to-playlist'; track: Track }
   | null
 

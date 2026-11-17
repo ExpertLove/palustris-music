@@ -1,8 +1,9 @@
-import { Heart, Pause, Play } from 'lucide-react'
+import { Heart, Pause, Play, ThumbsDown } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { bigThumb, initials, isVideoThumb } from '../lib/format'
 import type { Track } from '../lib/types'
 import { useLibrary } from '../store/library'
+import { useTaste } from '../store/taste'
 
 const hues = ['#3a3550', '#29404a', '#4a3530', '#2f4532', '#45304a', '#3d3d2a']
 const hueFor = (s: string) => hues[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % hues.length]
@@ -68,6 +69,27 @@ export function LikeButton({ track, size = 20, className = '' }: { track: Track;
       onAnimationEnd={() => setPop(false)}
     >
       <Heart size={size} fill={liked ? 'currentColor' : 'none'} className={pop ? 'like-pop' : ''} />
+    </button>
+  )
+}
+
+/** «Не нравится» рядом с лайком — в плеере, когда играет волна, радио или микс. Трек сразу переключается. */
+export function DislikeButton({ track, size = 20, className = '' }: { track: Track; size?: number; className?: string }) {
+  const on = useTaste((s) => s.disliked.has(track.id))
+  const toggle = useTaste((s) => s.toggleDislike)
+  return (
+    <button
+      type="button"
+      className={`icon-btn dislike ${on ? 'on' : ''} ${className}`}
+      aria-pressed={on}
+      aria-label={on ? 'Убрать из «Не нравится»' : 'Не нравится'}
+      title={on ? 'Убрать из «Не нравится»' : 'Не нравится (D)'}
+      onClick={(e) => {
+        e.stopPropagation()
+        void toggle(track)
+      }}
+    >
+      <ThumbsDown size={size} fill={on ? 'currentColor' : 'none'} />
     </button>
   )
 }

@@ -1,16 +1,20 @@
-import { BarChart3, Heart, Play, RefreshCw } from 'lucide-react'
+import { BarChart3, ChevronRight, Heart, Play, RefreshCw, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { Link } from 'wouter'
 import { CardsSkeleton, Cover, PlayFab, RowsSkeleton } from '../components/common'
-import { MediaCard, MoodCard, Shelf } from '../components/Cards'
+import { MediaCard, MixCard, MoodCard, Shelf, TrackCard } from '../components/Cards'
 import { TopBar } from '../components/Shell'
 import { TrackList } from '../components/TrackList'
 import { api } from '../lib/api'
-import { getRegion, MOODS, regionTitle } from '../lib/data'
-import { ago, greeting, tracksWord } from '../lib/format'
+import { getRegion, isDefaultWave, MOODS, regionTitle, waveLabel } from '../lib/data'
+import { ago, greeting, plural, tracksWord } from '../lib/format'
 import { useAsync } from '../lib/hooks'
-import { current, usePlayer } from '../player/store'
+import { wrappedSeason } from '../lib/stats'
+import type { Track } from '../lib/types'
+import { current, usePlayer, type Source } from '../player/store'
 import { useAuth } from '../store/auth'
 import { useLibrary } from '../store/library'
+import { useVisible } from '../store/taste'
+import { useUi } from '../store/ui'
 
 function Wave() {
   const wave = usePlayer((s) => s.wave)
@@ -18,12 +22,31 @@ function Wave() {
   const buffering = usePlayer((s) => s.buffering)
   const track = usePlayer((s) => current(s))
   const startWave = usePlayer((s) => s.startWave)
+  const settings = usePlayer((s) => s.waveSettings)
+  const openDialog = useUi((s) => s.openDialog)
   const active = wave && !!track
+  const tuned = !isDefaultWave(settings)
   return (
     <section className={`wave ${active && playing ? 'playing' : ''}`} aria-label="Моя волна">
       <div className="wave-blob" aria-hidden />
       <div>
-        <h2>Моя волна</h2>
+        <div className="wave-top">
+          <h2>Моя волна</h2>
+          <button
+            className={`wave-tune ${tuned ? 'on' : ''}`}
+            onClick={() => openDialog({ kind: 'wave' })}
+            title="Настроить волну"
+            aria-label={tuned ? `Настроить волну: сейчас ${waveLabel(settings)}` : 'Настроить волну'}
+          >
+            <SlidersHorizontal size={16} />
+            <span>Настроить</span>
+          </button>
+        </div>
+        {tuned && (
+          <button className="wave-set" onClick={() => openDialog({ kind: 'wave' })}>
+            {waveLabel(settings)}
+          </button>
+        )}
         <p>Бесконечный поток под твой вкус. Учится на лайках, прослушиваниях и пропусках — чем больше слушаешь, тем точнее.</p>
       </div>
       <div className="wave-row">
@@ -57,6 +80,53 @@ function Wave() {
   )
 }
 
+/** «Неделя в музыке»: минуты и главный исполнитель недели, вход в статистику. */
+function WeekTeaser() {
+  const res = useAsync('stats:week', () => api.stats('week'), 10 * 60_000)
+  const s = res.data
+  if (!s || !s.plays) return null
+  const top = s.topArtists[0]
+  return (
+    <Link href="/stats" className="teaser">
+      <span className="teaser-art">{top?.image || top?.thumb ? <Cover src={top.image || top.thumb} size={200} label={top.name} /> : <BarChart3 size={22} />}</span>
+      <span style={{ display: 'grid', minWidth: 0 }}>
+        <b>Неделя в музыке</b>
+        <span className="muted small ellipsis">
+          {s.minutes} {plural(s.minutes, 'минута', 'минуты', 'минут')}
+          {top ? ` · больше всего ${top.name}` : ''}
+        </span>
+      </span>
+      <ChevronRight size={20} className="faint" />
+    </Link>
+  )
+}
+
+/** «Итоги года» на главной — в декабре и январе. */
+function WrappedBanner() {
+  const year = wrappedSeason()
+  if (!year) return null
+  return (
+    <Link href="/wrapped" className="wrapped-banner">
+      <span>
+        <b>Итоги {year}</b>
+        <span>Твой год в музыке: главные треки, исполнители и минуты</span>
+      </span>
+      <Sparkles size={30} />
+    </Link>
+  )
+}
+
+function TrackShelf({ title, tracks, source }: { title: string; tracks: Track[]; source: Source }) {
+  if (tracks.length < 2) return null
+  return (
+    <Shelf title={title}>
+      {tracks.map((t, i) => (
+        <TrackCard key={`${t.id}-${i}`} track={t} list={tracks} index={i} source={source} />
+      ))}
+    </Shelf>
+  )
+}
+
 export default function Home() {
   const me = useAuth((s) => s.me)
   const likes = useLibrary((s) => s.likes)
@@ -64,7 +134,11 @@ export default function Home() {
   const region = getRegion()
   const history = useAsync('history:20', () => api.history(20), 30_000)
   const recs = useAsync('recs', () => api.recs(), 10 * 60_000)
+  const mixes = useAsync('mixes', () => api.mixes(), 10 * 60_000)
   const top = useAsync(`top:${region}`, () => api.top(region), 30 * 60_000)
+  const forYou = useVisible(recs.data)
+  const repeat = useVisible(mixes.data?.repeat)
+  const forgotten = useVisible(mixes.data?.forgotten)
   const last = history.data?.[0]
   const name = me?.name?.split(' ')[0]
 
@@ -120,6 +194,16 @@ export default function Home() {
           </Link>
         </div>
 
+        <WrappedBanner />
+
+        {mixes.data && mixes.data.mixes.length > 0 && (
+          <Shelf title="Миксы дня">
+            {mixes.data.mixes.map((m, i) => (
+              <MixCard key={m.id} mix={m} index={i} />
+            ))}
+          </Shelf>
+        )}
+
         {history.data && history.data.length > 2 && (
           <Shelf title="Недавно играло" more={{ href: '/library?tab=history' }}>
             {history.data.slice(0, 16).map((h, i) => (
@@ -148,18 +232,24 @@ export default function Home() {
           </div>
           {recs.loading && !recs.data ? (
             <RowsSkeleton n={6} />
-          ) : recs.data && recs.data.length ? (
-            <TrackList className="quick" tracks={recs.data.slice(0, 18)} source={{ kind: 'list', title: 'Для тебя', href: '/' }} numbered={false} numLabel={() => ''} />
+          ) : forYou.length ? (
+            <TrackList className="quick" tracks={forYou.slice(0, 18)} source={{ kind: 'mix', title: 'Для тебя', href: '/' }} numbered={false} numLabel={() => ''} />
           ) : (
             <p className="muted">Послушай и лайкни пару треков — подборка появится здесь.</p>
           )}
         </section>
+
+        <TrackShelf title="На повторе" tracks={repeat} source={{ kind: 'list', title: 'На повторе', href: '/' }} />
+
+        <WeekTeaser />
 
         <Shelf title="Настроение" more={{ href: '/moods' }} cardW={220}>
           {MOODS.slice(0, 10).map((m) => (
             <MoodCard key={m.id} m={m} />
           ))}
         </Shelf>
+
+        <TrackShelf title="Забытое любимое" tracks={forgotten} source={{ kind: 'list', title: 'Забытое любимое', href: '/' }} />
 
         <section className="section">
           <div className="section-head">

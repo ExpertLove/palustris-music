@@ -8,16 +8,20 @@ import { usePaletteFromCover, useHotkeys } from './player/effects'
 import { restorePlayer } from './player/store'
 import { useAuth } from './store/auth'
 import { useLibrary } from './store/library'
+import { useTaste } from './store/taste'
 import Home from './pages/Home'
 import Search from './pages/Search'
 import Library from './pages/Library'
-import { AlbumPage, ArtistPage, LikedPage, MoodPage, MoodsPage, PlaylistPage, SharedPage, TopPage } from './pages/Collections'
+import { AlbumPage, ArtistPage, LikedPage, MixPage, MoodPage, MoodsPage, PlaylistPage, SharedPage, TopPage } from './pages/Collections'
 import { Forgot, Login, Register, Reset } from './pages/Auth'
 import Legal from './pages/Legal'
 
 const Account = lazy(() => import('./pages/Account'))
 const Admin = lazy(() => import('./pages/Admin'))
 const Landing = lazy(() => import('./pages/Landing'))
+const Stats = lazy(() => import('./pages/Stats'))
+const Hidden = lazy(() => import('./pages/Stats').then((m) => ({ default: m.HiddenPage })))
+const Wrapped = lazy(() => import('./pages/Wrapped'))
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '')
 
@@ -41,6 +45,7 @@ function Shell({ children }: { children: ReactNode }) {
       restorePlayer()
     }
     void useLibrary.getState().load()
+    void useTaste.getState().load()
   }, [])
   useEffect(() => {
     document.querySelector('.main')?.scrollTo({ top: 0 })
@@ -79,6 +84,10 @@ function UserRoutes() {
         <Route path="/moods" component={MoodsPage} />
         <Route path="/mood/:id" component={MoodPage} />
         <Route path="/top" component={TopPage} />
+        <Route path="/mix/:id" component={MixPage} />
+        <Route path="/stats" component={Stats} />
+        <Route path="/wrapped" component={Wrapped} />
+        <Route path="/hidden" component={Hidden} />
         <Route path="/account" component={Account} />
         <Route path="/admin" component={Admin} />
         <Route path="/s/:slug" component={SharedPage} />
@@ -147,7 +156,10 @@ export default function App() {
     void useAuth.getState().init()
   }, [])
   useEffect(() => {
-    if (status === 'guest') useLibrary.getState().reset()
+    if (status === 'guest') {
+      useLibrary.getState().reset()
+      useTaste.getState().reset()
+    }
   }, [status])
 
   return (

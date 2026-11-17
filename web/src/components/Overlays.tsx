@@ -9,17 +9,22 @@ import {
   MicVocal,
   Moon,
   Plus,
+  Radio,
+  ThumbsDown,
   Trash2,
+  UserX,
   X,
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
 import { api } from '../lib/api'
+import { DEFAULT_WAVE, isDefaultWave, WAVE_ACTIVITIES, WAVE_MODES, WAVE_MOODS, type WaveOption } from '../lib/data'
 import { firstArtist } from '../lib/format'
 import { invalidate, useMobile } from '../lib/hooks'
-import type { Track } from '../lib/types'
+import type { Track, WaveSettings } from '../lib/types'
 import { usePlayer } from '../player/store'
 import { useLibrary } from '../store/library'
+import { useTaste } from '../store/taste'
 import { toast, useUi } from '../store/ui'
 import { Collage, Cover } from './common'
 import { Equalizer } from './Equalizer'
@@ -57,6 +62,7 @@ function TrackMenuView() {
   const liked = useLibrary((s) => (menu ? s.liked.has(menu.track.id) : false))
   const toggleLike = useLibrary((s) => s.toggleLike)
   const bump = useLibrary((s) => s.bumpPlaylist)
+  const disliked = useTaste((s) => (menu ? s.disliked.has(menu.track.id) : false))
 
   useLayoutEffect(() => {
     if (!menu || mobile || !ref.current) return setPos(null)
@@ -97,6 +103,7 @@ function TrackMenuView() {
     <div key="s1" className="menu-sep" />,
     <Item key="like" icon={<Heart size={18} fill={liked ? 'currentColor' : 'none'} />} label={liked ? 'Убрать из «Мне нравится»' : 'Мне нравится'} onClick={run(() => toggleLike(t))} />,
     <Item key="pl" icon={<ListPlus size={18} />} label="Добавить в плейлист" onClick={run(() => openDialog({ kind: 'add-to-playlist', track: t }))} />,
+    <Item key="radio" icon={<Radio size={18} />} label="Радио по треку" onClick={run(() => void p.startRadio(t))} />,
   ]
   if (menu.ctx.playlistId !== undefined) {
     const pid = menu.ctx.playlistId
@@ -146,6 +153,14 @@ function TrackMenuView() {
         }
       })}
     />,
+    <div key="s3" className="menu-sep" />,
+    <Item
+      key="dislike"
+      icon={<ThumbsDown size={18} fill={disliked ? 'currentColor' : 'none'} />}
+      label={disliked ? 'Убрать из «Не нравится»' : 'Не нравится'}
+      onClick={run(() => void useTaste.getState().toggleDislike(t))}
+    />,
+    <Item key="hide" icon={<UserX size={18} />} label="Не предлагать исполнителя" onClick={run(() => void useTaste.getState().hideArtist(t))} />,
   )
 
   const head = (
@@ -213,9 +228,9 @@ function Toasts() {
   )
 }
 
-function NewPlaylistDialog({ track, tracks, onClose }: { track?: Track; tracks?: Track[]; onClose: () => void }) {
+function NewPlaylistDialog({ track, tracks, name: initial, onClose }: { track?: Track; tracks?: Track[]; name?: string; onClose: () => void }) {
   const create = useLibrary((s) => s.createPlaylist)
-  const [name, setName] = useState(tracks?.length ? '' : track ? `${firstArtist(track.artist)} и не только` : '')
+  const [name, setName] = useState(initial ?? (tracks?.length ? '' : track ? `${firstArtist(track.artist)} и не только` : ''))
   const [busy, setBusy] = useState(false)
   const [, navigate] = useLocation()
   const submit = async (e: React.FormEvent) => {
@@ -330,6 +345,62 @@ function SleepDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
+/** Настройки «Моей волны», как в Яндекс Музыке и в приложении. Применяются при закрытии окна:
+ *  если волна играет, всё впереди пересобирается одним запросом, а не на каждое нажатие. */
+function WaveDialog({ onClose }: { onClose: () => void }) {
+  const saved = usePlayer((s) => s.waveSettings)
+  const active = usePlayer((s) => s.wave && s.index >= 0)
+  const [w, setW] = useState<WaveSettings>(saved)
+  const changed = w.mode !== saved.mode || w.mood !== saved.mood || w.activity !== saved.activity
+  const close = () => {
+    if (changed) void usePlayer.getState().setWaveSettings(w)
+    onClose()
+  }
+  const listen = () => {
+    close()
+    void usePlayer.getState().startWave()
+  }
+  return (
+    <Dialog title="Настроить волну" onClose={close} width={540}>
+      <p className="muted small">Волна подстроится под выбор. Твой вкус учитывается всегда.</p>
+      <WaveGroup title="Характер" options={WAVE_MODES} value={w.mode} required onPick={(mode) => setW({ ...w, mode })} />
+      <WaveGroup title="Настроение" options={WAVE_MOODS} value={w.mood} onPick={(mood) => setW({ ...w, mood })} />
+      <WaveGroup title="Занятие" options={WAVE_ACTIVITIES} value={w.activity} onPick={(activity) => setW({ ...w, activity })} />
+      <div className="dialog-actions">
+        {!isDefaultWave(w) && (
+          <button className="btn btn-ghost" onClick={() => setW(DEFAULT_WAVE)}>
+            Сбросить
+          </button>
+        )}
+        <button className="btn btn-primary" onClick={active ? close : listen}>
+          {active ? 'Готово' : 'Слушать'}
+        </button>
+      </div>
+    </Dialog>
+  )
+}
+
+/** Выбор одного варианта; повторное нажатие снимает выбор (кроме характера). */
+function WaveGroup<K extends string>({ title, options, value, required, onPick }: { title: string; options: WaveOption<K>[]; value: K; required?: boolean; onPick: (v: K) => void }) {
+  return (
+    <div className="wave-group" role="group" aria-label={title}>
+      <h3>{title}</h3>
+      <div className="genre-grid">
+        {options.map((o) => {
+          const on = o.id === value
+          const Icon = o.icon
+          return (
+            <button key={o.id || 'all'} type="button" className={`chip ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => onPick(on && !required ? ('' as K) : o.id)}>
+              <Icon size={16} />
+              {o.title}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export const SHORTCUTS: [string, string[]][] = [
   ['Играть / пауза', ['Пробел']],
   ['Следующий трек', ['Shift', '→']],
@@ -338,6 +409,7 @@ export const SHORTCUTS: [string, string[]][] = [
   ['Громкость', ['↑', '↓']],
   ['Без звука', ['M']],
   ['Мне нравится', ['L']],
+  ['Не нравится', ['D']],
   ['Перемешать', ['S']],
   ['Повтор', ['R']],
   ['Поиск', ['/']],
@@ -383,7 +455,8 @@ export function Overlays() {
       )}
       {dialog?.kind === 'sleep' && <SleepDialog onClose={close} />}
       {dialog?.kind === 'shortcuts' && <ShortcutsDialog onClose={close} />}
-      {dialog?.kind === 'new-playlist' && <NewPlaylistDialog track={dialog.track} tracks={dialog.tracks} onClose={close} />}
+      {dialog?.kind === 'wave' && <WaveDialog onClose={close} />}
+      {dialog?.kind === 'new-playlist' && <NewPlaylistDialog track={dialog.track} tracks={dialog.tracks} name={dialog.name} onClose={close} />}
       {dialog?.kind === 'add-to-playlist' && <AddToPlaylistDialog track={dialog.track} onClose={close} />}
     </>
   )

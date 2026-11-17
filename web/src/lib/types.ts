@@ -115,6 +115,99 @@ export interface SharedPlaylist {
   items: Track[]
 }
 
+// ───────── рекомендации ─────────
+
+/** Настройки «Моей волны»: пустая строка — «любое». Значения — те, что понимает `/api/wave`. */
+export interface WaveSettings {
+  mode: '' | 'favorite' | 'discover' | 'popular'
+  mood: '' | 'energetic' | 'happy' | 'calm' | 'sad'
+  activity: '' | 'wakeup' | 'road' | 'work' | 'workout' | 'sleep' | 'party'
+}
+
+export interface Mix {
+  id: string
+  title: string
+  sub: string
+  thumbs: string[]
+  tracks: Track[]
+}
+
+export interface Mixes {
+  mixes: Mix[]
+  /** Лайкнутые давно и давно не игравшие. */
+  forgotten: Track[]
+  /** Что крутят последние недели. */
+  repeat: Track[]
+}
+
+export interface Dislikes {
+  tracks: Track[]
+  artists: { name: string; at: number }[]
+}
+
+// ───────── статистика ─────────
+
+export interface ArtistStat {
+  name: string
+  plays: number
+  minutes: number
+  thumb: string | null
+  /** Фото из YouTube Music, только у первых мест. */
+  image: string | null
+  artistId?: string
+}
+
+export interface TrackStat extends Track {
+  plays: number
+  minutes: number
+}
+
+export type StatsPeriod = 'week' | 'month' | 'year' | 'all'
+
+export interface Stats {
+  period: StatsPeriod
+  from: number
+  minutes: number
+  plays: number
+  tracks: number
+  artists: number
+  prevMinutes: number | null
+  topArtists: ArtistStat[]
+  topTracks: TrackStat[]
+  /** Минуты по часам суток, 24 значения. */
+  hours: number[]
+  /** Минуты по дням недели, с понедельника. */
+  weekdays: number[]
+  buckets: { start: number; minutes: number }[]
+  bucketKind: 'day' | 'month'
+  streak: number
+  bestStreak: number
+  newArtists: number
+  since: number
+}
+
+export interface Wrapped {
+  year: number
+  minutes: number
+  plays: number
+  tracks: number
+  artists: number
+  days: number
+  topArtists: ArtistStat[]
+  topTracks: TrackStat[]
+  /** Минуты по месяцам, 12 значений. */
+  months: number[]
+  hours: number[]
+  busiestDay: { start: number; minutes: number; plays: number } | null
+  bestStreak: number
+  newArtists: number
+  firstTrack: Track | null
+  firstAt: number
+  likes: number
+  /** Какую долю слушателей обогнал по минутам, %. Нет, если слушателей мало. */
+  percentile: number | null
+}
+
 // ───────── админка ─────────
 
 export interface AdminOverview {

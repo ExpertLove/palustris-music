@@ -2,11 +2,12 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'wouter'
 import { api } from '../lib/api'
-import type { Mood } from '../lib/data'
-import type { AlbumCard, ArtistCard, Track } from '../lib/types'
-import { usePlayer, type Source } from '../player/store'
-import { toast } from '../store/ui'
-import { Cover, PlayFab } from './common'
+import { mixColor, type Mood } from '../lib/data'
+import type { AlbumCard, ArtistCard, Mix, Track } from '../lib/types'
+import { current, usePlayer, type Source } from '../player/store'
+import { useLongPress } from '../lib/hooks'
+import { toast, useUi } from '../store/ui'
+import { Collage, Cover, EqBars, PlayFab } from './common'
 
 export function Shelf({ title, more, children, cardW }: { title?: ReactNode; more?: { href: string; label?: string }; children: ReactNode; cardW?: number }) {
   const row = useRef<HTMLDivElement>(null)
@@ -59,6 +60,7 @@ export function MediaCard({
   round,
   load,
   source,
+  className = '',
 }: {
   href: string
   title: string
@@ -67,6 +69,7 @@ export function MediaCard({
   round?: boolean
   load?: () => Promise<Track[]>
   source?: Source
+  className?: string
 }) {
   const playList = usePlayer((s) => s.playList)
   const [busy, setBusy] = useState(false)
@@ -86,7 +89,7 @@ export function MediaCard({
     }
   }
   return (
-    <Link href={href} className={`card ${round ? 'round' : ''}`}>
+    <Link href={href} className={`card ${round ? 'round' : ''} ${className}`}>
       <div className="card-art">
         {art}
         {load && (
@@ -129,6 +132,82 @@ export function ArtistCardView({ a }: { a: ArtistCard }) {
       sub={a.sub || 'Исполнитель'}
       art={<Cover src={a.thumb} size={400} label={a.name} />}
       load={() => api.artist({ id: a.id }).then((p) => p.tracks)}
+    />
+  )
+}
+
+/** Карточка трека на полке: нажатие играет всю полку с этого места, правый клик — меню. */
+export function TrackCard({ track, list, index, source }: { track: Track; list: Track[]; index: number; source: Source }) {
+  const isCurrent = usePlayer((s) => current(s)?.id === track.id)
+  const playing = usePlayer((s) => s.playing)
+  const openMenu = useUi((s) => s.openMenu)
+  const lp = useLongPress((x, y) => openMenu({ track, x, y, ctx: {} }))
+  const play = () => {
+    const p = usePlayer.getState()
+    if (isCurrent) p.toggle()
+    else p.playList(list, index, source)
+  }
+  return (
+    <div
+      className={`card track-card ${isCurrent ? 'current' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${track.title} — ${track.artist}`}
+      onClick={() => !lp.wasLongPress() && play()}
+      onKeyDown={(e) => e.key === 'Enter' && play()}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        openMenu({ track, x: e.clientX, y: e.clientY, ctx: {} })
+      }}
+      onPointerDown={lp.onPointerDown}
+      onPointerUp={lp.onPointerUp}
+      onPointerLeave={lp.onPointerLeave}
+      onPointerMove={lp.onPointerMove}
+    >
+      <div className="card-art">
+        <Cover src={track.thumb} size={400} label={track.title} />
+        <span className={`card-play ${isCurrent ? 'on' : ''}`}>
+          <PlayFab
+            playing={isCurrent && playing}
+            onClick={(e) => {
+              e.stopPropagation()
+              play()
+            }}
+            className="sm"
+            size={18}
+            label={isCurrent && playing ? 'Пауза' : `Играть «${track.title}»`}
+          />
+        </span>
+      </div>
+      <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+        <span className="t ellipsis">
+          {isCurrent && <EqBars paused={!playing} />} {track.title}
+        </span>
+        <span className="s ellipsis">{track.artist}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Обложка микса дня: мозаика обложек, снизу — цвет номера и название. */
+export function MixCover({ mix, index }: { mix: Mix; index: number }) {
+  return (
+    <div className="mix-cover" style={{ ['--mix' as string]: mixColor(index) } as React.CSSProperties}>
+      <Collage thumbs={mix.thumbs} label={mix.title} />
+      <b>{mix.title}</b>
+    </div>
+  )
+}
+
+export function MixCard({ mix, index }: { mix: Mix; index: number }) {
+  return (
+    <MediaCard
+      href={`/mix/${mix.id}`}
+      className="mix-card"
+      title={mix.sub}
+      art={<MixCover mix={mix} index={index} />}
+      load={async () => mix.tracks}
+      source={{ kind: 'mix', title: mix.title, href: `/mix/${mix.id}` }}
     />
   )
 }

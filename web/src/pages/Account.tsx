@@ -1,4 +1,4 @@
-import { Gauge, Keyboard, LogOut, MailCheck, MailWarning, Shield, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { BarChart3, EyeOff, Gauge, Keyboard, LogOut, MailCheck, MailWarning, Shield, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'wouter'
 import { Dialog } from '../components/Overlays'
@@ -6,10 +6,12 @@ import { TopBar } from '../components/Shell'
 import { api } from '../lib/api'
 import { GENRES } from '../lib/data'
 import { initials, plural } from '../lib/format'
+import { wrappedYear } from '../lib/stats'
 import { engine } from '../player/engine'
-import { usePlayer } from '../player/store'
+import { dropListen, usePlayer } from '../player/store'
 import { useAuth } from '../store/auth'
 import { useLibrary } from '../store/library'
+import { useTaste } from '../store/taste'
 import { toast, useUi } from '../store/ui'
 
 export default function Account() {
@@ -41,8 +43,10 @@ export default function Account() {
   const signOut = async () => {
     usePlayer.getState().pause()
     engine.stop()
+    dropListen()
     localStorage.removeItem('music.player.v2')
     resetLib()
+    useTaste.getState().reset()
     await logout()
   }
 
@@ -74,7 +78,7 @@ export default function Account() {
           <div className="acc-stats">
             <Stat n={me.likes} label={plural(me.likes, 'лайк', 'лайка', 'лайков')} href="/liked" />
             <Stat n={me.playlists} label={plural(me.playlists, 'плейлист', 'плейлиста', 'плейлистов')} href="/library" />
-            <Stat n={me.plays} label={plural(me.plays, 'прослушивание', 'прослушивания', 'прослушиваний')} href="/library?tab=history" />
+            <Stat n={me.plays} label={plural(me.plays, 'прослушивание', 'прослушивания', 'прослушиваний')} href="/stats" />
             <Stat n={me.genres.length} label={plural(me.genres.length, 'жанр', 'жанра', 'жанров')} />
           </div>
 
@@ -122,6 +126,22 @@ export default function Account() {
               >
                 Сохранить
               </button>
+            </div>
+          </section>
+
+          <section className="acc-card">
+            <h2>Музыка и рекомендации</h2>
+            <p>Сколько и что ты слушаешь, итоги года и скрытое из рекомендаций.</p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <Link href="/stats" className="btn btn-ghost">
+                <BarChart3 size={18} /> Статистика
+              </Link>
+              <Link href="/wrapped" className="btn btn-ghost">
+                <Sparkles size={18} /> Итоги {wrappedYear()}
+              </Link>
+              <Link href="/hidden" className="btn btn-ghost">
+                <EyeOff size={18} /> Скрытое
+              </Link>
             </div>
           </section>
 
@@ -213,6 +233,8 @@ export default function Account() {
                 try {
                   await api.deleteAccount()
                   engine.stop()
+                  dropListen()
+                  useTaste.getState().reset()
                   localStorage.removeItem('music.player.v2')
                   resetLib()
                   dropSession()

@@ -5,15 +5,21 @@ import type {
   ArtistPage,
   DlEvent,
   Collection,
+  Dislikes,
   HistItem,
   LibraryArtist,
   Lyrics,
+  Mixes,
   PlaylistFull,
   PlaylistRow,
   Profile,
   SearchAll,
   SharedPlaylist,
+  Stats,
+  StatsPeriod,
   Track,
+  WaveSettings,
+  Wrapped,
   YtAccount,
 } from './types'
 
@@ -71,7 +77,10 @@ async function req<T>(path: string, init: RequestInit & { json?: unknown } = {})
 
 const get = <T>(p: string) => req<T>(p)
 const post = <T>(p: string, json?: unknown) => req<T>(p, { method: 'POST', json: json ?? {} })
-const del = <T>(p: string) => req<T>(p, { method: 'DELETE' })
+const del = <T>(p: string, json?: unknown) => req<T>(p, { method: 'DELETE', json })
+
+/** Сдвиг местного времени от UTC в минутах (Москва = 180): сервер делит статистику на дни и часы по нему. */
+export const tzMinutes = () => -new Date().getTimezoneOffset()
 const q = (o: Record<string, string | number | undefined | null>) => {
   const s = new URLSearchParams()
   for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== '') s.set(k, String(v))
@@ -104,7 +113,19 @@ export const api = {
   searchAll: (s: string) => get<SearchAll>(`/search/all?${q({ q: s })}`),
   top: (region: string) => get<Track[]>(`/top?${q({ region })}`),
   recs: () => get<Track[]>('/recs'),
-  wave: () => get<Track[]>('/wave'),
+  wave: (w?: Partial<WaveSettings>, region?: string) =>
+    get<Track[]>(`/wave?${q({ mode: w?.mode, mood: w?.mood, activity: w?.activity, region: w?.mode === 'popular' ? region : undefined })}`),
+  /** Радио по треку: до 40 похожих, сам трек не входит. */
+  radio: (t: Track) => get<Track[]>(`/radio?${q({ id: t.id, title: t.title, artist: t.artist })}`),
+  artistRadio: (p: { artistId?: string | null; artistName?: string }) => get<Track[]>(`/radio?${q(p)}`),
+  mixes: () => get<Mixes>('/mixes'),
+  dislikes: () => get<Dislikes>('/dislikes'),
+  dislike: (t: Track) => post<null>('/dislikes', strip(t)),
+  undislike: (id: string) => del<null>(`/dislikes/${encodeURIComponent(id)}`),
+  blockArtist: (name: string) => post<null>('/blocked-artists', { name }),
+  unblockArtist: (name: string) => del<null>('/blocked-artists', { name }),
+  stats: (period: StatsPeriod) => get<Stats>(`/stats?${q({ period, tz: tzMinutes() })}`),
+  wrapped: (year?: number) => get<Wrapped>(`/wrapped?${q({ year, tz: tzMinutes() })}`),
   artists: () => get<LibraryArtist[]>('/artists'),
   artist: (p: { id?: string; name?: string }) => get<ArtistPage>(`/yt/artist?${q(p)}`),
   collection: (id: string) => get<Collection>(`/yt/collection/${encodeURIComponent(id)}`),
@@ -116,7 +137,10 @@ export const api = {
   like: (t: Track) => post<null>('/likes', strip(t)),
   unlike: (id: string) => del<null>(`/likes/${encodeURIComponent(id)}`),
   history: (limit = 50) => get<HistItem[]>(`/history?limit=${limit}`),
-  addHistory: (t: Track) => post<null>('/history', strip(t)),
+  /** Прослушивание: когда начало играть (`at`, unix) и сколько секунд звучало (`secs`) — для статистики и рекомендаций.
+   *  `keepalive` — чтобы запрос ушёл, даже если вкладку закрывают. */
+  addHistory: (t: Track, at?: number, secs?: number, keepalive = false) =>
+    req<null>('/history', { method: 'POST', json: { ...strip(t), at, secs }, keepalive }),
   clearHistory: () => del<null>('/history'),
   skip: (t: Track) => post<null>('/skip', strip(t)),
   prefetch: (ids: string[]) => post<null>('/prefetch', { ids }),
