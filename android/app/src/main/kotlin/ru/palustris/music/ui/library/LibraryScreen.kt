@@ -1,6 +1,20 @@
 package ru.palustris.music.ui.library
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import ru.palustris.music.core.model.LibraryArtist
+import ru.palustris.music.ui.common.Artwork
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -59,7 +73,13 @@ import ru.palustris.music.ui.common.plural
 import ru.palustris.music.ui.playlists.NameDialog
 import ru.palustris.music.ui.playlists.PlaylistListItem
 
-enum class LibraryTab(val title: String) { Likes("Нравится"), Playlists("Плейлисты"), Downloads("Скачанные"), History("История") }
+enum class LibraryTab(val title: String) {
+  Likes("Нравится"),
+  Playlists("Плейлисты"),
+  Artists("Исполнители"),
+  Downloads("Скачанные"),
+  History("История"),
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,12 +87,16 @@ fun LibraryScreen(
   contentPadding: PaddingValues,
   initialTab: LibraryTab,
   onOpenSettings: () -> Unit,
+  onMessage: (String) -> Unit,
   vm: LibraryViewModel = hiltViewModel(),
 ) {
   val likes by vm.likes.collectAsStateWithLifecycle()
   val downloads by vm.downloads.collectAsStateWithLifecycle()
   val playlists by vm.playlists.collectAsStateWithLifecycle()
   val history by vm.history.collectAsStateWithLifecycle()
+  val artists by vm.artists.collectAsStateWithLifecycle()
+  val clearingHistory by vm.clearingHistory.collectAsStateWithLifecycle()
+  var confirmClear by remember { mutableStateOf(false) }
   val refreshing by vm.refreshing.collectAsStateWithLifecycle()
   val error by vm.error.collectAsStateWithLifecycle()
   val downloadsBytes by vm.downloadsBytes.collectAsStateWithLifecycle()
@@ -82,7 +106,14 @@ fun LibraryScreen(
   val nav = LocalNavigator.current
 
   LaunchedEffect(Unit) { if (likes == null || playlists == null) vm.refresh() }
-  LaunchedEffect(tab) { if (tab == LibraryTab.History.ordinal) vm.refreshHistory() }
+  LaunchedEffect(vm) { vm.messages.collect(onMessage) }
+  LaunchedEffect(tab) {
+    when (LibraryTab.entries[tab]) {
+      LibraryTab.History -> vm.refreshHistory()
+      LibraryTab.Artists -> vm.refreshArtists()
+      else -> {}
+    }
+  }
 
   Column(Modifier.fillMaxSize()) {
     Text(
@@ -96,6 +127,7 @@ fun LibraryScreen(
           when (t) {
             LibraryTab.Likes -> likes?.size
             LibraryTab.Playlists -> playlists?.size
+            LibraryTab.Artists -> null
             LibraryTab.Downloads -> downloads.size
             LibraryTab.History -> null
           }
@@ -104,7 +136,13 @@ fun LibraryScreen(
     }
     PullToRefreshBox(
       isRefreshing = refreshing,
-      onRefresh = { if (tab == LibraryTab.History.ordinal) vm.refreshHistory() else vm.refresh() },
+      onRefresh = {
+        when (LibraryTab.entries[tab]) {
+          LibraryTab.History -> vm.refreshHistory()
+          LibraryTab.Artists -> vm.refreshArtists()
+          else -> vm.refresh()
+        }
+      },
       modifier = Modifier.weight(1f),
     ) {
       LazyColumn(contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
@@ -145,6 +183,29 @@ fun LibraryScreen(
               else -> items(list, key = { "pl:" + it.id }) { p -> PlaylistListItem(p) { nav.openPlaylist(p.id) } }
             }
           }
+          LibraryTab.Artists -> {
+            val list = artists
+            when {
+              list == null -> item { LoadingState() }
+              list.isEmpty() ->
+                item {
+                  MessageState(
+                    "Пока пусто",
+                    "Здесь соберутся исполнители, которых вы слушаете и лайкаете",
+                    icon = Icons.Rounded.Person,
+                  )
+                }
+              else ->
+                items(list.chunked(3), key = { "ar:" + it.first().name }) { row ->
+                  Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                    row.forEach { a ->
+                      LibraryArtistCell(a, Modifier.weight(1f)) { nav.openArtist(null, a.name.substringBefore(',').trim()) }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                  }
+                }
+            }
+          }
           LibraryTab.Downloads -> downloadsTab(downloads, downloadsBytes, onOpenSettings)
           LibraryTab.History -> {
             val list = history
@@ -154,6 +215,16 @@ fun LibraryScreen(
                 item { MessageState("История пуста", "Здесь появятся треки, которые вы дослушали", icon = Icons.Rounded.History) }
               else -> {
                 val tracks = list.map { it.toTrack() }
+                item(key = "h-actions") {
+                  PlayActions(tracks) {
+                    AssistChip(
+                      onClick = { confirmClear = true },
+                      enabled = !clearingHistory,
+                      label = { Text(if (clearingHistory) "Очищаем…" else "Очистить") },
+                      leadingIcon = { Icon(Icons.Rounded.DeleteSweep, null, Modifier.size(18.dp)) },
+                    )
+                  }
+                }
                 itemsIndexed(list, key = { _, h -> "h:" + h.id }) { i, h ->
                   TrackRow(
                     tracks[i],
@@ -168,6 +239,21 @@ fun LibraryScreen(
         }
       }
     }
+  }
+
+  if (confirmClear) {
+    AlertDialog(
+      onDismissRequest = { confirmClear = false },
+      title = { Text("Очистить историю?") },
+      text = { Text("«Моя волна» и рекомендации начнут подбирать музыку заново. Лайки, плейлисты и скачанное останутся.") },
+      confirmButton = {
+        TextButton(onClick = {
+          confirmClear = false
+          vm.clearHistory()
+        }) { Text("Очистить", color = MaterialTheme.colorScheme.error) }
+      },
+      dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Отмена") } },
+    )
   }
 
   if (creating) {
@@ -213,6 +299,33 @@ private fun LazyListScope.downloadsTab(downloads: List<TrackDownload>, bytes: Lo
       onClick = { if (done.isNotEmpty()) actions.play(done, done.indexOfFirst { it.id == d.track.id }.coerceAtLeast(0)) },
       subtitle = sub,
       modifier = Modifier.padding(horizontal = 8.dp),
+    )
+  }
+}
+
+/** Исполнитель в сетке: круглая обложка, имя и сколько раз его слушали и лайкали. */
+@Composable
+private fun LibraryArtistCell(artist: LibraryArtist, modifier: Modifier = Modifier, onClick: () -> Unit) {
+  Column(
+    modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick, role = Role.Button).padding(8.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Artwork(artist.thumb, Modifier.fillMaxWidth().aspectRatio(1f), size = 226, shape = CircleShape)
+    Text(
+      artist.name,
+      style = MaterialTheme.typography.labelLarge,
+      // Две строки всегда: подписи в ряду стоят на одной высоте.
+      minLines = 2,
+      maxLines = 2,
+      textAlign = TextAlign.Center,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.padding(top = 8.dp),
+    )
+    Text(
+      plural(artist.count, "прослушивание", "прослушивания", "прослушиваний"),
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
     )
   }
 }

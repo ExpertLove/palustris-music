@@ -38,11 +38,20 @@ data class Settings(
   val crossfadeSec: Int = 0,
   /** Страна чарта: две буквы, "" — весь мир, `null` — по языку телефона. */
   val region: String? = null,
+  /** Скорость воспроизведения в процентах (как на сайте: 0,75×–1,5×). Тон голоса не меняется. */
+  val speedPercent: Int = 100,
 ) {
+  val speed: Float
+    get() = speedPercent / 100f
+
   companion object {
     const val DEFAULT_CACHE_MB = 256
     val CACHE_OPTIONS_MB = listOf(128, 256, 512, 1024, 2048)
     val CROSSFADE_OPTIONS_SEC = listOf(0, 3, 6, 9, 12)
+    val SPEED_OPTIONS_PERCENT = listOf(75, 100, 125, 150)
+
+    /** «1,25×» */
+    fun speedLabel(percent: Int): String = "%s×".format((percent / 100f).toString().removeSuffix(".0").replace('.', ','))
   }
 }
 
@@ -56,6 +65,7 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   private val normalizeKey = booleanPreferencesKey("normalize")
   private val crossfadeKey = intPreferencesKey("crossfade_sec")
   private val regionKey = stringPreferencesKey("chart_region")
+  private val speedKey = intPreferencesKey("speed_percent")
 
   /** `null`, пока DataStore не прочитан: кэш не должен чистить себя по лимиту по умолчанию. */
   val settings: StateFlow<Settings?> =
@@ -68,6 +78,7 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
           normalize = p[normalizeKey] ?: true,
           crossfadeSec = (p[crossfadeKey] ?: 0).coerceIn(0, Settings.CROSSFADE_OPTIONS_SEC.max()),
           region = p[regionKey],
+          speedPercent = p[speedKey]?.takeIf { it in Settings.SPEED_OPTIONS_PERCENT } ?: 100,
         )
       }
       .stateIn(scope, SharingStarted.Eagerly, null)
@@ -86,4 +97,6 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   suspend fun setCrossfade(sec: Int) = context.settingsStore.edit { it[crossfadeKey] = sec }
 
   suspend fun setRegion(code: String) = context.settingsStore.edit { it[regionKey] = code }
+
+  suspend fun setSpeed(percent: Int) = context.settingsStore.edit { it[speedKey] = percent }
 }

@@ -25,6 +25,7 @@ import ru.palustris.music.core.prefs.SessionStore
 import ru.palustris.music.core.prefs.SettingsStore
 import ru.palustris.music.core.model.PlaylistRow
 import ru.palustris.music.data.AccountRepository
+import ru.palustris.music.data.HistoryRepository
 import ru.palustris.music.data.LibraryRepository
 import ru.palustris.music.data.OfflineFiles
 import ru.palustris.music.data.Outbox
@@ -55,6 +56,7 @@ constructor(
   private val account: AccountRepository,
   private val outbox: Outbox,
   private val files: OfflineFiles,
+  private val history: HistoryRepository,
   equalizer: EqualizerStore,
 ) : ViewModel(), TrackActions, PlayerControls {
 
@@ -177,6 +179,20 @@ constructor(
 
   override fun cycleRepeat() = player.cycleRepeat()
 
+  override fun moveInQueue(from: Int, to: Int, id: String): Boolean = player.moveInQueue(from, to, id)
+
+  override fun removeFromQueue(index: Int, id: String) = player.removeFromQueue(index, id)
+
+  override fun clearUpNext() = player.clearUpNext()
+
+  override fun setSpeed(percent: Int) {
+    viewModelScope.launch { settings.setSpeed(percent) }
+  }
+
+  /** Скорость в процентах: в плеере видно, что она не обычная. */
+  val speedPercent: StateFlow<Int> =
+    settings.settings.map { it?.speedPercent ?: 100 }.stateIn(viewModelScope, SharingStarted.Eagerly, settings.current.speedPercent)
+
   /** Таймер сна: минуты, -1 — до конца трека, 0 — выключить. */
   fun setSleep(minutes: Int) =
     when {
@@ -229,6 +245,7 @@ constructor(
     library.clear()
     playlistsRepo.clear()
     account.clear()
+    history.reset()
     files.clearAll()
     if (wipeDownloads) {
       storage.removeAll()

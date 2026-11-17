@@ -28,6 +28,7 @@ import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
 import ru.palustris.music.core.prefs.SettingsStore
 import ru.palustris.music.data.AccountRepository
+import ru.palustris.music.data.HistoryRepository
 import ru.palustris.music.data.LibraryRepository
 import ru.palustris.music.data.OfflineFiles
 import ru.palustris.music.data.PlaylistsRepository
@@ -70,6 +71,7 @@ constructor(
   private val api: MusicApi,
   private val files: OfflineFiles,
   private val settings: SettingsStore,
+  history: HistoryRepository,
   account: AccountRepository,
   library: LibraryRepository,
   playlists: PlaylistsRepository,
@@ -99,6 +101,13 @@ constructor(
     }
     // Сменили страну на экране чарта: обновляем и блок на главной.
     viewModelScope.launch { region.drop(1).collect { refreshTop(it) } }
+    // Историю очистили в «Моей музыке»: «Недавно играло» пустеет сразу, и в копии на телефоне тоже.
+    viewModelScope.launch {
+      history.cleared.collect {
+        _ui.update { it.copy(data = it.data.copy(history = emptyList())) }
+        files.write(FILE, HomeData.serializer(), _ui.value.data)
+      }
+    }
   }
 
   fun refresh() {

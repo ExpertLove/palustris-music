@@ -10,6 +10,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -37,6 +38,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -127,6 +131,7 @@ class PlaybackService : MediaLibraryService() {
       }
     )
     sleepTimer.player = player
+    applySpeed(player)
     restoreQueue(player)
     persistQueue(player)
     watchTransitions(player)
@@ -196,6 +201,17 @@ class PlaybackService : MediaLibraryService() {
         // Следующий трек уже загружается: иначе вместо перехода была бы тишина.
         p.totalBufferedDuration - (duration - p.currentPosition) >= NEXT_BUFFERED_MS
     return CrossfadePlan(item.mediaId, fadeMs, allowed)
+  }
+
+  /**
+   * Скорость из настроек, в том числе после перезапуска. `setPlaybackSpeed` оставляет тон прежним:
+   * Sonic в конце цепочки меняет темп, а не высоту. Наши процессоры стоят до него и считают
+   * время трека, поэтому переход в 6 с на 1,5× звучит 4 с.
+   */
+  private fun applySpeed(player: ExoPlayer) {
+    scope.launch {
+      settings.settings.filterNotNull().map { it.speed }.distinctUntilChanged().collect { player.setPlaybackSpeed(it) }
+    }
   }
 
   /** Текущий и три следующих трека в порядке воспроизведения (с учётом перемешивания). */
@@ -426,6 +442,11 @@ class PlaybackService : MediaLibraryService() {
       prefetchNext()
       extendWave()
       requestLoudness(player)
+    }
+
+    /** Из очереди «Моей волны» убрали треки или очистили «Далее»: волна догружается сразу. */
+    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+      if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) extendWave()
     }
 
     private fun report(item: MediaItem, played: Long, manual: Boolean) {

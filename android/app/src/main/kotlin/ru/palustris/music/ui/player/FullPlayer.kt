@@ -65,6 +65,11 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberBottomSheetState
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import ru.palustris.music.core.prefs.Settings
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderState
@@ -126,6 +131,15 @@ interface PlayerControls {
   fun toggleShuffle()
 
   fun cycleRepeat()
+
+  /** `false` — очередь успела измениться, ничего не переставлено. */
+  fun moveInQueue(from: Int, to: Int, id: String): Boolean
+
+  fun removeFromQueue(index: Int, id: String)
+
+  fun clearUpNext()
+
+  fun setSpeed(percent: Int)
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
@@ -140,6 +154,7 @@ fun FullPlayer(
   eqEnabled: Boolean,
   onOpenEqualizer: () -> Unit,
   onOpenArtist: () -> Unit,
+  speedPercent: Int = 100,
 ) {
   val track = state.track ?: return
   val marks = LocalTrackMarks.current
@@ -147,6 +162,7 @@ fun FullPlayer(
   val nav = LocalNavigator.current
   var showQueue by remember { mutableStateOf(false) }
   var showSleep by remember { mutableStateOf(false) }
+  var showSpeed by remember { mutableStateOf(false) }
   var showLyrics by rememberSaveable { mutableStateOf(false) }
   val lyricsVm: LyricsViewModel = hiltViewModel()
   val lyrics by lyricsVm.state.collectAsStateWithLifecycle()
@@ -195,6 +211,16 @@ fun FullPlayer(
               "${state.index + 1} из ${state.queue.size}",
               style = MaterialTheme.typography.labelSmall,
               color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+          }
+        }
+        // Скорость не обычная: показываем, чтобы не гадать, почему музыка звучит быстрее.
+        if (speedPercent != 100) {
+          TextButton(onClick = { showSpeed = true }) {
+            Text(
+              Settings.speedLabel(speedPercent),
+              style = MaterialTheme.typography.labelLarge,
+              modifier = Modifier.semantics { contentDescription = "Скорость ${Settings.speedLabel(speedPercent)}. Изменить" },
             )
           }
         }
@@ -286,8 +312,17 @@ fun FullPlayer(
   }
 
   if (showQueue) {
-    ModalBottomSheet(onDismissRequest = { showQueue = false }) {
-      QueueList(state, onPick = controls::skipTo)
+    // Высокая сразу: в полураскрытой перетаскивать неудобно.
+    ModalBottomSheet(onDismissRequest = { showQueue = false }, sheetState = rememberBottomSheetState(SheetValue.Hidden, setOf(SheetValue.Hidden, SheetValue.Expanded))) {
+      QueueSheet(state, controls)
+    }
+  }
+  if (showSpeed) {
+    ModalBottomSheet(onDismissRequest = { showSpeed = false }) {
+      SpeedSheet(speedPercent) {
+        controls.setSpeed(it)
+        showSpeed = false
+      }
     }
   }
   if (showSleep) {
@@ -356,6 +391,30 @@ private fun SleepSheet(sleep: SleepState, onPick: (Int) -> Unit) {
     }
     if (sleep != SleepState.Off) {
       TextButton(onClick = { onPick(0) }, modifier = Modifier.padding(top = 8.dp)) { Text("Выключить таймер") }
+    }
+  }
+}
+
+@Composable
+private fun SpeedSheet(percent: Int, onPick: (Int) -> Unit) {
+  Column(Modifier.navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 16.dp)) {
+    Text("Скорость", style = MaterialTheme.typography.titleLarge)
+    Text(
+      "Тон голоса не меняется. Выбор запоминается",
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+    )
+    SpeedChips(percent, onPick)
+  }
+}
+
+/** Варианты скорости, как на сайте. Нужны и в плеере, и в настройках. */
+@Composable
+fun SpeedChips(percent: Int, onPick: (Int) -> Unit) {
+  FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Settings.SPEED_OPTIONS_PERCENT.forEach { p ->
+      FilterChip(selected = percent == p, onClick = { onPick(p) }, label = { Text(Settings.speedLabel(p)) })
     }
   }
 }
@@ -460,48 +519,5 @@ private fun Controls(state: PlayerState, controls: PlayerControls) {
         tint = if (state.repeatMode != Player.REPEAT_MODE_OFF) scheme.primary else scheme.onSurfaceVariant,
       )
     }
-  }
-}
-
-@Composable
-private fun QueueList(state: PlayerState, onPick: (Int) -> Unit) {
-  val listState = rememberLazyListState(initialFirstVisibleItemIndex = (state.index - 2).coerceAtLeast(0))
-  Column {
-    Row(Modifier.padding(horizontal = 24.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-      Text("Очередь", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-      Text(
-        "${state.queue.size}",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-    LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height(480.dp)) {
-      itemsIndexed(state.queue, key = { i, t -> "$i:${t.id}" }) { i, t ->
-        val current = i == state.index
-        Row(
-          Modifier.fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (current) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Box(Modifier.size(44.dp)) {
-            Artwork(t.thumb, Modifier.fillMaxSize(), size = 120, shape = RoundedCornerShape(12.dp))
-            if (current) {
-              Box(Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(0.45f)), Alignment.Center) {
-                PlayingBars(state.isPlaying)
-              }
-            }
-          }
-          Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(t.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(t.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-          }
-          if (!current) TextButton(onClick = { onPick(i) }) { Text("Играть") }
-        }
-      }
-    }
-    Spacer(Modifier.navigationBarsPadding().height(12.dp))
   }
 }

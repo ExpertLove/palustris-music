@@ -70,6 +70,10 @@ constructor(
 
   fun setCrossfade(sec: Int) = viewModelScope.launch { store.setCrossfade(sec) }
 
+  fun setSpeed(percent: Int) {
+    viewModelScope.launch { store.setSpeed(percent) }
+  }
+
   fun clearCache() =
     viewModelScope.launch {
       storage.clearListeningCache()

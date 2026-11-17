@@ -17,6 +17,16 @@ import androidx.compose.material.icons.rounded.Piano
 import androidx.compose.material.icons.rounded.Speaker
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 
 /** Жанры профиля: те же id, что на сайте и на сервере (`GENRES` в main.rs). */
 data class Genre(val id: String, val title: String, val icon: ImageVector)
@@ -41,6 +51,22 @@ val GENRES =
   )
 
 const val MAX_GENRES = 8
+
+/** Жанры чипами, не больше [MAX_GENRES]. Одни и те же в профиле и при регистрации. */
+@Composable
+fun GenreChips(selected: List<String>, onChange: (List<String>) -> Unit, modifier: Modifier = Modifier) {
+  FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    GENRES.forEach { g ->
+      val on = g.id in selected
+      FilterChip(
+        selected = on,
+        onClick = { onChange(if (on) selected - g.id else if (selected.size >= MAX_GENRES) selected else selected + g.id) },
+        label = { Text(g.title) },
+        leadingIcon = { Icon(g.icon, null, Modifier.size(FilterChipDefaults.IconSize)) },
+      )
+    }
+  }
+}
 
 /** Две буквы для аватара: «Анна Петрова» → «АП», «anna@mail.ru» → «A». */
 fun initials(nameOrEmail: String): String {

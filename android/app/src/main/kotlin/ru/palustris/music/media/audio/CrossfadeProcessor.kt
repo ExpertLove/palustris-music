@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -82,9 +83,18 @@ class CrossfadeProcessor(
     if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) inputAudioFormat else AudioProcessor.AudioFormat.NOT_SET
 
   override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
+    val next = resolver.resolve(streamMetadata)
+    // Тот же трек с того же места: синк слил цепочку и сбросил её, чтобы сменить скорость.
+    // Это не перемотка и не конец трека: захват и смешивание идут дальше, а хвост, который
+    // «конец потока» успел отложить, возвращается в кольцо. Иначе при смене скорости в последние
+    // секунды трека пропало бы до 12 с звука.
+    if (continuesCurrent(next)) {
+      if (tail != null && tailUid == info.periodUid && !mixing) restoreCapture()
+      Timber.tag(TAG).d("flush %s continues at %dms", next.mediaId, next.startUs / 1000)
+      return
+    }
     rate = inputAudioFormat.sampleRate
     ch = inputAudioFormat.channelCount
-    val next = resolver.resolve(streamMetadata)
     // Повторный flush того же потока без данных между ними: на границе треков синк сначала
     // перенастраивает цепочку, потом ещё раз сбрасывает её, выравнивая время. Это не перемотка,
     // ничего не сбрасываем, иначе переход пропал бы, не начавшись. Стартовую позицию берём новую:
@@ -196,6 +206,24 @@ class CrossfadeProcessor(
     dropTail()
   }
 
+  /** Flush того же трека ровно с того кадра, на котором остановился вход. */
+  private fun continuesCurrent(next: StreamInfo): Boolean {
+    if (next.periodUid == null || next.periodUid != info.periodUid || framesIn == 0L || rate <= 0) return false
+    val expectedUs = info.startUs + framesIn * 1_000_000L / rate
+    return abs(next.startUs - expectedUs) <= CONTINUE_TOLERANCE_US
+  }
+
+  /** Хвост текущего трека снова в кольцо: трек не кончился, захват продолжается. */
+  private fun restoreCapture() {
+    val t = tail ?: return
+    if (tailCh != ch || tailFrames > ringCap || ring.size < tailFrames * ch) return
+    System.arraycopy(t, 0, ring, 0, tailFrames * ch)
+    ringStart = 0
+    ringCount = tailFrames
+    capturing = true
+    dropTail()
+  }
+
   /** С какого кадра потока начинать придерживать хвост, или MAX_VALUE, если не нужно. */
   private fun captureStartFrame(): Long {
     if (mixing || rate <= 0 || info.periodUid == null || info.durationUs == C.TIME_UNSET) return Long.MAX_VALUE
@@ -300,6 +328,12 @@ class CrossfadeProcessor(
     /** Короче секунды переход не делаем: хвост просто выводится. */
     const val MIN_TAIL_MS = 1000
     private const val TAG = "Crossfade"
+    /**
+     * Насколько позиция из flush может расходиться со счётом кадров, чтобы считаться продолжением:
+     * синк срезает задержку кодека (до ~50 мс) до нас. Перемотка сюда не попадает: её первый flush
+     * идёт с нулевой позицией.
+     */
+    private const val CONTINUE_TOLERANCE_US = 150_000L
     /**
      * Хвост старше трёх секунд не смешиваем: значит, следующий трек не пришёл сразу (ошибка,
      * пауза ровно на границе), и конец старого трека в начале нового уже неуместен.

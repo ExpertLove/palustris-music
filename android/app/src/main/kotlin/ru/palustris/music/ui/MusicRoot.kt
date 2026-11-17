@@ -164,6 +164,7 @@ private fun MainScaffold(vm: MainViewModel) {
   val progress = vm.player.progress.collectAsState(initial = ru.palustris.music.media.Progress(0, 0, 0))
   val sleep by vm.sleep.collectAsStateWithLifecycle()
   val eqEnabled by vm.eqEnabled.collectAsStateWithLifecycle()
+  val speedPercent by vm.speedPercent.collectAsStateWithLifecycle()
   val pickFor by vm.pickPlaylistFor.collectAsStateWithLifecycle()
   val playlists by vm.playlists.collectAsStateWithLifecycle()
   val backStack = rememberNavBackStack(HomeKey)
@@ -266,7 +267,7 @@ private fun MainScaffold(vm: MainViewModel) {
             entry<HomeKey> { HomeScreen(player = playerState, contentPadding = contentPadding, onToggle = vm::togglePlay) }
             entry<SearchKey> { SearchScreen(contentPadding) }
             entry<LibraryKey> { key ->
-              LibraryScreen(contentPadding, initialTab = key.tab, onOpenSettings = { backStack.add(SettingsKey) })
+              LibraryScreen(contentPadding, initialTab = key.tab, onOpenSettings = { backStack.add(SettingsKey) }, onMessage = vm::message)
             }
             entry<SettingsKey> {
               SettingsScreen(
@@ -347,6 +348,7 @@ private fun MainScaffold(vm: MainViewModel) {
           onOpenArtist = {
             playerState.track?.let { t -> push(ArtistKey(t.artistId, t.artist.substringBefore(',').trim())) }
           },
+          speedPercent = speedPercent,
         )
       }
 

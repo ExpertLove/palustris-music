@@ -4,19 +4,23 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import ru.palustris.music.core.model.Track
+import kotlinx.serialization.builtins.ListSerializer
 import ru.palustris.music.core.model.HistoryItem
+import ru.palustris.music.core.model.LibraryArtist
 import ru.palustris.music.core.model.PlaylistRow
+import ru.palustris.music.core.model.Track
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
-import kotlinx.serialization.builtins.ListSerializer
+import ru.palustris.music.data.HistoryRepository
 import ru.palustris.music.data.LibraryRepository
 import ru.palustris.music.data.OfflineFiles
 import ru.palustris.music.data.PlaylistsRepository
@@ -30,23 +34,54 @@ constructor(
   private val library: LibraryRepository,
   private val storage: AudioStorage,
   private val playlistsRepo: PlaylistsRepository,
+  private val historyRepo: HistoryRepository,
   private val api: MusicApi,
   private val files: OfflineFiles,
 ) : ViewModel() {
   val playlists: StateFlow<List<PlaylistRow>?> = playlistsRepo.list
 
-  private val _history = MutableStateFlow<List<HistoryItem>?>(null)
-  val history: StateFlow<List<HistoryItem>?> = _history.asStateFlow()
+  val history: StateFlow<List<HistoryItem>?> = historyRepo.items
 
   fun refreshHistory() {
+    viewModelScope.launch { historyRepo.refresh() }
+  }
+
+  private val _clearingHistory = MutableStateFlow(false)
+  val clearingHistory: StateFlow<Boolean> = _clearingHistory.asStateFlow()
+
+  /** Короткие сообщения для снекбара. */
+  private val _messages = Channel<String>(Channel.BUFFERED)
+  val messages = _messages.receiveAsFlow()
+
+  fun clearHistory() {
+    if (_clearingHistory.value) return
     viewModelScope.launch {
-      if (_history.value == null) _history.value = files.read(HISTORY_FILE, ListSerializer(HistoryItem.serializer()))
-      apiCall { api.history(150) }
+      _clearingHistory.value = true
+      historyRepo
+        .clearAll()
         .onSuccess {
-          _history.value = it
-          files.write(HISTORY_FILE, ListSerializer(HistoryItem.serializer()), it)
+          _messages.send("История очищена")
+          // Исполнители собраны и из истории: список тоже поменялся.
+          refreshArtists()
         }
-        .onFailure { if (_history.value == null) _history.value = emptyList() }
+        .onFailure { _messages.send(it.message ?: "Не получилось очистить историю") }
+      _clearingHistory.value = false
+    }
+  }
+
+  private val _artists = MutableStateFlow<List<LibraryArtist>?>(null)
+  /** Исполнители из лайков и истории; `null` — ещё не загрузили. */
+  val artists: StateFlow<List<LibraryArtist>?> = _artists.asStateFlow()
+
+  fun refreshArtists() {
+    viewModelScope.launch {
+      if (_artists.value == null) _artists.value = files.read(ARTISTS_FILE, ARTISTS)
+      apiCall { api.libraryArtists() }
+        .onSuccess {
+          _artists.value = it
+          files.write(ARTISTS_FILE, ARTISTS, it)
+        }
+        .onFailure { if (_artists.value == null) _artists.value = emptyList() }
     }
   }
 
@@ -85,6 +120,7 @@ constructor(
   }
 
   private companion object {
-    const val HISTORY_FILE = "history.json"
+    const val ARTISTS_FILE = "artists.json"
+    val ARTISTS = ListSerializer(LibraryArtist.serializer())
   }
 }

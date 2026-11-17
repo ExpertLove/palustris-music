@@ -20,6 +20,18 @@ fun formatBytes(bytes: Long): String {
   }
 }
 
+/** Длина списка: «37 мин», «2 ч 5 мин», «3 ч». */
+fun formatLength(seconds: Long): String {
+  val min = (seconds.coerceAtLeast(0) + 30) / 60
+  val h = min / 60
+  val m = min % 60
+  return when {
+    h == 0L -> "$m мин"
+    m == 0L -> "$h ч"
+    else -> "$h ч $m мин"
+  }
+}
+
 fun formatMb(mb: Int): String = if (mb >= 1024) "${mb / 1024} ГБ" else "$mb МБ"
 
 /** Русское склонение после числа: 1 трек, 2 трека, 5 треков. */

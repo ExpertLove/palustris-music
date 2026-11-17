@@ -148,6 +148,13 @@ constructor(
       if (list.removeAll { it.playlistId == id && it !== inFlight }) save(list)
     }
 
+  /** История очищена: неотправленные прослушивания тоже забываем, иначе они вернули бы её. */
+  suspend fun dropListens() =
+    lock.withLock {
+      val list = loaded()
+      if (list.removeAll { it is PendingOp.Listened && it !== inFlight }) save(list)
+    }
+
   private suspend fun save(list: List<PendingOp>) {
     _pending.value = list.size
     if (list.isEmpty()) files.delete(FILE) else files.write(FILE, ListSerializer(PendingOp.serializer()), list)

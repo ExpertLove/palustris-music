@@ -195,6 +195,51 @@ class CrossfadeProcessorTest {
     assertEquals(2000, frame(mixStart + 3 * 48_000))
   }
 
+  /** Смена скорости: синк сливает цепочку (queueEndOfStream) и сбрасывает её с тем же треком и текущей позицией. */
+  private fun speedChange(uid: String, atUs: Long) {
+    p.queueEndOfStream()
+    drain()
+    p.flush(meta(uid, atUs))
+  }
+
+  @Test
+  fun speedChangeDuringCaptureLosesNothing() {
+    val a = Track("A", "a", 30, 1000)
+    val b = Track("B", "b", 30, 2000)
+    start(a)
+    feed(a, 0, 10)
+    speedChange("A", 10_000_000) // до захвата
+    feed(a, 10, 28) // захват с 26-й секунды
+    speedChange("A", 28_000_000) // во время захвата: это не конец трека
+    feed(a, 28, 30)
+    end()
+    plan = CrossfadePlan("b", 3000, false)
+    start(b)
+    feed(b)
+    // Ровно как без смены скорости: ни одного лишнего или потерянного кадра.
+    assertEquals((30 + 30) * rate - 3 * rate, out.size / ch)
+    assertEquals(1000, frame(27 * rate - 1))
+    assertEquals((2000 + 1000) * sqrt(0.5), frame(27 * rate + 3 * rate / 2).toDouble(), 2.0)
+    assertEquals(2000, frame(30 * rate))
+  }
+
+  @Test
+  fun speedChangeDuringMixKeepsMixing() {
+    val a = Track("A", "a", 30, 1000)
+    val b = Track("B", "b", 30, 2000)
+    start(a)
+    feed(a)
+    end()
+    plan = CrossfadePlan("b", 3000, false)
+    start(b)
+    feed(b, 0, 1) // смешивание идёт
+    speedChange("B", 1_000_000)
+    feed(b, 1, 30)
+    assertEquals((30 + 30) * rate - 3 * rate, out.size / ch)
+    assertEquals((2000 + 1000) * sqrt(0.5), frame(27 * rate + 3 * rate / 2).toDouble(), 2.0)
+    assertEquals(2000, frame(30 * rate))
+  }
+
   @Test
   fun lastTrackIsNotCut() {
     plan = CrossfadePlan("a", 3000, true)

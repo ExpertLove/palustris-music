@@ -59,6 +59,7 @@ import ru.palustris.music.core.prefs.DownloadQuality
 import ru.palustris.music.core.prefs.Settings
 import ru.palustris.music.media.StorageUsage
 import ru.palustris.music.ui.account.Avatar
+import ru.palustris.music.ui.player.SpeedChips
 import ru.palustris.music.ui.common.GroupCard
 import ru.palustris.music.ui.common.GroupHeader
 import ru.palustris.music.ui.common.formatBytes
@@ -135,6 +136,18 @@ fun SettingsScreen(
             )
           }
         }
+      }
+    }
+    item {
+      GroupCard {
+        Text("Скорость", style = MaterialTheme.typography.titleMedium)
+        Text(
+          "Быстрее или медленнее. Тон голоса не меняется",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+        )
+        SpeedChips(settings.speedPercent, vm::setSpeed)
       }
     }
 

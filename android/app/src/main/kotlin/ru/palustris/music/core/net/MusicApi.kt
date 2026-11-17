@@ -13,6 +13,7 @@ import ru.palustris.music.core.model.Collection
 import ru.palustris.music.core.model.Creds
 import ru.palustris.music.core.model.HistoryItem
 import ru.palustris.music.core.model.IdBody
+import ru.palustris.music.core.model.LibraryArtist
 import ru.palustris.music.core.model.Lyrics
 import ru.palustris.music.core.model.NameBody
 import ru.palustris.music.core.model.NewPlaylist
@@ -93,6 +94,12 @@ interface MusicApi {
   @GET("api/yt/collection/{id}") suspend fun collection(@Path("id") id: String): Collection
 
   @GET("api/history") suspend fun history(@Query("limit") limit: Int = 100): List<HistoryItem>
+
+  /** Стереть историю и пропуски: «Моя волна» начнёт учиться заново. */
+  @DELETE("api/history") suspend fun clearHistory()
+
+  /** Исполнители из лайков и истории, самые частые сверху (до 60). */
+  @GET("api/artists") suspend fun libraryArtists(): List<LibraryArtist>
 
   @GET("api/playlists") suspend fun playlists(): List<PlaylistRow>
 

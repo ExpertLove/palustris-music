@@ -3,6 +3,7 @@ package ru.palustris.music.media
 import android.content.ComponentName
 import android.content.Context
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -36,10 +37,33 @@ data class PlayerState(
   val source: String? = null,
   val queue: List<Track> = emptyList(),
   val index: Int = -1,
+  /**
+   * Что сыграет после текущего: индексы в [queue] в порядке воспроизведения. Без перемешивания это
+   * просто хвост очереди, с ним — порядок, который выбрал плеер.
+   */
+  val upNext: List<Int> = emptyList(),
   val error: String? = null,
 )
 
 data class Progress(val positionMs: Long, val bufferedMs: Long, val durationMs: Long)
+
+/** [1, 2, 3, 7, 8] → [1..3, 7..8]. Вход в любом порядке, выход по возрастанию. */
+fun contiguousRanges(indices: Collection<Int>): List<IntRange> {
+  val sorted = indices.toSortedSet()
+  val out = ArrayList<IntRange>()
+  var start = -1
+  var end = -1
+  for (i in sorted) {
+    if (start >= 0 && i == end + 1) end = i
+    else {
+      if (start >= 0) out += start..end
+      start = i
+      end = i
+    }
+  }
+  if (start >= 0) out += start..end
+  return out
+}
 
 /**
  * Интерфейс управляет плеером через MediaController, а сам плеер живёт в [PlaybackService].
@@ -155,6 +179,33 @@ class PlayerConnection @Inject constructor(@ApplicationContext private val conte
     if (c.mediaItemCount == 0) play(listOf(track)) else c.addMediaItem(track.toMediaItem())
   }
 
+  /**
+   * Переставить трек очереди с места [from] на [to]. Только среди треков после текущего. [id] защищает
+   * от устаревших индексов: пока палец тянул трек, очередь могла сдвинуться. `false` — ничего не сделано.
+   */
+  fun moveInQueue(from: Int, to: Int, id: String): Boolean {
+    val c = controller ?: return false
+    val cur = c.currentMediaItemIndex
+    if (from !in 0 until c.mediaItemCount || to !in 0 until c.mediaItemCount) return false
+    if (from <= cur || to <= cur || c.getMediaItemAt(from).mediaId != id) return false
+    if (from != to) c.moveMediaItem(from, to)
+    return true
+  }
+
+  /** Убрать из очереди не играющий сейчас трек. */
+  fun removeFromQueue(index: Int, id: String) = withController { c ->
+    if (index in 0 until c.mediaItemCount && index != c.currentMediaItemIndex && c.getMediaItemAt(index).mediaId == id) {
+      c.removeMediaItem(index)
+    }
+  }
+
+  /** Убрать всё, что сыграло бы после текущего. Сыгранное остаётся: кнопка «назад» работает. */
+  fun clearUpNext() = withController { c ->
+    val remove = upNextOf(c)
+    // С конца и кусками подряд идущих индексов: индексы ещё не удалённых не съезжают.
+    for (range in contiguousRanges(remove).asReversed()) c.removeMediaItems(range.first, range.last + 1)
+  }
+
   private val listener =
     object : Player.Listener {
       override fun onEvents(player: Player, events: Player.Events) {
@@ -179,8 +230,23 @@ class PlayerConnection @Inject constructor(@ApplicationContext private val conte
         source = c.currentMediaItem?.queueSource,
         queue = if (queueChanged) items.map(MediaItem::toTrack) else prev.queue,
         index = c.currentMediaItemIndex,
+        upNext = upNextOf(c).let { if (it == prev.upNext) prev.upNext else it },
         error = c.playerError?.let(::describe),
       )
+  }
+
+  private fun upNextOf(c: MediaController): List<Int> {
+    val timeline = c.currentTimeline
+    if (timeline.isEmpty || c.currentMediaItemIndex == C.INDEX_UNSET) return emptyList()
+    val out = ArrayList<Int>()
+    var i = c.currentMediaItemIndex
+    // Без повтора: иначе очередь замкнулась бы в кольцо. Ограничение — на случай сломанного таймлайна.
+    while (out.size < timeline.windowCount) {
+      i = timeline.getNextWindowIndex(i, Player.REPEAT_MODE_OFF, c.shuffleModeEnabled)
+      if (i == C.INDEX_UNSET || i >= c.mediaItemCount) break
+      out += i
+    }
+    return out
   }
 
   private fun describe(e: PlaybackException): String =

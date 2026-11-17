@@ -312,17 +312,7 @@ private fun ProfileCard(m: Me, saving: Boolean, onSave: (String, List<String>) -
       style = MaterialTheme.typography.titleSmall,
       modifier = Modifier.padding(top = 18.dp, bottom = 6.dp),
     )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      GENRES.forEach { g ->
-        val on = g.id in genres
-        FilterChip(
-          selected = on,
-          onClick = { genres = if (on) genres - g.id else if (genres.size >= MAX_GENRES) genres else genres + g.id },
-          label = { Text(g.title) },
-          leadingIcon = { Icon(g.icon, null, Modifier.size(FilterChipDefaults.IconSize)) },
-        )
-      }
-    }
+    GenreChips(genres, onChange = { genres = it })
     Button(onClick = { onSave(name, genres) }, enabled = dirty && !saving, modifier = Modifier.padding(top = 14.dp)) {
       Text(if (saving) "Сохраняем…" else "Сохранить")
     }

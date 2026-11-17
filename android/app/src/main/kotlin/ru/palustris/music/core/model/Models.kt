@@ -164,3 +164,8 @@ data class HistoryItem(
 ) {
   fun toTrack() = Track(id, title, artist, album, duration, thumb)
 }
+
+/** Исполнитель из «Моей музыки»: собран из лайков и истории. `count` — прослушивания и лайки вместе. */
+@Immutable
+@Serializable
+data class LibraryArtist(val name: String, val count: Int = 0, val thumb: String? = null)
