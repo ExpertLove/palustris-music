@@ -7,6 +7,7 @@ mod loudness;
 mod lyrics;
 mod mail;
 mod recs;
+mod stats;
 mod yt;
 
 use axum::{
@@ -46,6 +47,8 @@ struct AppState {
     admins: Vec<String>,
     data: std::path::PathBuf,
     started: i64,
+    /// Миксы дня: пользователь → (день, миксы). Считаются раз в сутки.
+    mixes: Mutex<std::collections::HashMap<i64, (i64, Vec<recs::Mix>)>>,
 }
 
 type St = State<Arc<AppState>>;
@@ -955,6 +958,7 @@ async fn like(State(st): St, h: HeaderMap, Json(t): Json<Track>) -> ApiResult<()
         params![u, t.id, t.title, t.artist, t.album, t.duration, t.thumb, recs::now()],
     )
     .map_err(e500)?;
+    let _ = db.execute("DELETE FROM dislikes WHERE user_id=?1 AND track_id=?2", params![u, t.id]);
     Ok(Json(()))
 }
 
@@ -966,13 +970,30 @@ async fn unlike(State(st): St, h: HeaderMap, Path(id): Path<String>) -> ApiResul
     Ok(Json(()))
 }
 
-async fn history(State(st): St, h: HeaderMap, Json(t): Json<Track>) -> ApiResult<()> {
+/// Прослушивание. Приложение присылает, когда трек на самом деле играл (`at`, оно копит
+/// прослушивания без сети) и сколько секунд (`secs`); сайт — только трек.
+#[derive(Deserialize)]
+struct HistBody {
+    #[serde(flatten)]
+    track: Track,
+    #[serde(default)]
+    at: Option<i64>,
+    #[serde(default)]
+    secs: Option<i64>,
+}
+
+async fn history(State(st): St, h: HeaderMap, Json(b): Json<HistBody>) -> ApiResult<()> {
     let u = uid(&st, &h)?;
+    let now = recs::now();
+    // Время из будущего или старше месяца не принимаем: часы телефона могут врать.
+    let at = b.at.filter(|a| *a > now - 30 * 86400 && *a <= now + 300).map(|a| a.min(now)).unwrap_or(now);
+    let secs = b.secs.filter(|s| *s > 0).map(|s| s.min(4 * 3600));
+    let t = b.track;
     let db = st.db.lock().map_err(e500)?;
     db.execute(
-        "INSERT INTO history(user_id, track_id, title, artist, album, duration, thumb, played_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![u, t.id, t.title, t.artist, t.album, t.duration, t.thumb, recs::now()],
+        "INSERT INTO history(user_id, track_id, title, artist, album, duration, thumb, played_at, secs)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![u, t.id, t.title, t.artist, t.album, t.duration, t.thumb, at, secs],
     )
     .map_err(e500)?;
     Ok(Json(()))
@@ -1038,9 +1059,252 @@ async fn recs_handler(State(st): St, h: HeaderMap) -> ApiResult<Vec<Track>> {
     Ok(Json(recs::recommend(&st.db, &st.cache, &st.http, u).await))
 }
 
-async fn wave_handler(State(st): St, h: HeaderMap) -> ApiResult<Vec<recs::WaveTrack>> {
+#[derive(Deserialize)]
+struct WaveQ {
+    mode: Option<String>,
+    mood: Option<String>,
+    activity: Option<String>,
+    region: Option<String>,
+}
+
+fn known(v: Option<String>, allowed: &[&str]) -> Option<String> {
+    v.filter(|s| allowed.contains(&s.as_str()))
+}
+
+/// «Моя волна». Без параметров — как раньше; `mode`, `mood`, `activity` — настройки волны.
+async fn wave_handler(State(st): St, h: HeaderMap, Query(q): Query<WaveQ>) -> ApiResult<Vec<recs::WaveTrack>> {
     let u = uid(&st, &h)?;
-    Ok(Json(recs::wave(&st.db, &st.cache, &st.http, u).await))
+    let params = recs::WaveParams {
+        mode: recs::Mode::parse(q.mode.as_deref()),
+        mood: known(q.mood, &["energetic", "happy", "calm", "sad"]),
+        activity: known(q.activity, &["wakeup", "road", "work", "workout", "sleep", "party"]),
+        region: clean_region(q.region.as_deref()),
+    };
+    let chart = chart_cached(&st, &params.region).await;
+    Ok(Json(recs::wave(&st.db, &st.cache, &st.http, &chart, u, &params).await))
+}
+
+#[derive(Deserialize)]
+struct RadioQ {
+    /// videoId трека-зерна.
+    id: Option<String>,
+    title: Option<String>,
+    artist: Option<String>,
+    /// Радио исполнителя: browseId (UC…) или имя.
+    #[serde(rename = "artistId")]
+    artist_id: Option<String>,
+    #[serde(rename = "artistName")]
+    artist_name: Option<String>,
+}
+
+/// Радио: похожее на трек (`id`) или на исполнителя (`artistId` / `artistName`).
+async fn radio_handler(State(st): St, h: HeaderMap, Query(q): Query<RadioQ>) -> ApiResult<Vec<recs::WaveTrack>> {
+    let u = uid(&st, &h)?;
+    if let Some(id) = q.id.filter(|i| yt::valid_video_id(i)) {
+        let title: String = q.title.unwrap_or_default().chars().take(300).collect();
+        let artist: String = q.artist.unwrap_or_default().chars().take(300).collect();
+        let seed = Track::new(id, title, artist);
+        return Ok(Json(recs::track_radio(&st.db, &st.cache, &st.http, u, &seed).await));
+    }
+    let id = q
+        .artist_id
+        .filter(|i| i.starts_with("UC") && i.len() < 80 && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    let name = q.artist_name.unwrap_or_default();
+    let name = name.trim();
+    if id.is_none() && (name.is_empty() || name.len() > 200) {
+        return Err((StatusCode::BAD_REQUEST, "нужен трек или исполнитель".into()));
+    }
+    Ok(Json(recs::artist_radio(&st.db, &st.cache, &st.http, u, id.as_deref(), name).await))
+}
+
+/// Миксы дня, забытые лайки и «на повторе» для главной.
+async fn mixes_handler(State(st): St, h: HeaderMap) -> ApiResult<recs::Mixes> {
+    let u = uid(&st, &h)?;
+    let today = recs::today();
+    let cached = st.mixes.lock().ok().and_then(|m| m.get(&u).filter(|(d, _)| *d == today).map(|(_, v)| v.clone()));
+    let mixes = match cached {
+        Some(v) => v,
+        None => {
+            let v = recs::daily_mixes(&st.db, &st.cache, &st.http, u).await;
+            if let Ok(mut m) = st.mixes.lock() {
+                if m.len() > 5000 {
+                    m.retain(|_, (d, _)| *d == today);
+                }
+                // Пустые не запоминаем: возможно, YouTube на минуту не ответил.
+                if !v.is_empty() {
+                    m.insert(u, (today, v.clone()));
+                }
+            }
+            v
+        }
+    };
+    let (forgotten, repeat) = {
+        let db = st.db.lock().map_err(e500)?;
+        recs::personal_shelves(&db, u)
+    };
+    Ok(Json(recs::Mixes { mixes, forgotten, repeat }))
+}
+
+// ───────────────────────── «не нравится» ─────────────────────────
+
+/// «Не нравится»: трек больше не попадёт ни в волну, ни в радио, исполнитель — реже. Лайк снимается.
+async fn dislike(State(st): St, h: HeaderMap, Json(t): Json<Track>) -> ApiResult<()> {
+    let u = uid(&st, &h)?;
+    if t.id.is_empty() || t.id.len() > 64 {
+        return Err((StatusCode::BAD_REQUEST, "bad track".into()));
+    }
+    {
+        let db = st.db.lock().map_err(e500)?;
+        db.execute(
+            "INSERT OR REPLACE INTO dislikes(user_id, track_id, title, artist, album, duration, thumb, at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![u, t.id, t.title, t.artist, t.album, t.duration, t.thumb, recs::now()],
+        )
+        .map_err(e500)?;
+        db.execute("DELETE FROM likes WHERE user_id=?1 AND track_id=?2", params![u, t.id]).map_err(e500)?;
+    }
+    forget_mixes(&st, u);
+    Ok(Json(()))
+}
+
+async fn undislike(State(st): St, h: HeaderMap, Path(id): Path<String>) -> ApiResult<()> {
+    let u = uid(&st, &h)?;
+    let db = st.db.lock().map_err(e500)?;
+    db.execute("DELETE FROM dislikes WHERE user_id=?1 AND track_id=?2", params![u, id]).map_err(e500)?;
+    Ok(Json(()))
+}
+
+#[derive(Serialize)]
+struct BlockedArtist {
+    name: String,
+    at: i64,
+}
+
+#[derive(Serialize)]
+struct Dislikes {
+    tracks: Vec<Track>,
+    artists: Vec<BlockedArtist>,
+}
+
+/// Что пользователь скрыл: треки с «не нравится» и исполнители.
+async fn dislikes_list(State(st): St, h: HeaderMap) -> ApiResult<Dislikes> {
+    let u = uid(&st, &h)?;
+    let db = st.db.lock().map_err(e500)?;
+    let tracks = db
+        .prepare(&format!("SELECT {} FROM dislikes WHERE user_id=?1 ORDER BY at DESC LIMIT 500", db::TRACK_COLS))
+        .map_err(e500)?
+        .query_map([u], db::row_track)
+        .map_err(e500)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(e500)?;
+    let artists = db
+        .prepare("SELECT name, at FROM blocked_artists WHERE user_id=?1 ORDER BY at DESC")
+        .map_err(e500)?
+        .query_map([u], |r| Ok(BlockedArtist { name: r.get(0)?, at: r.get(1)? }))
+        .map_err(e500)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(e500)?;
+    Ok(Json(Dislikes { tracks, artists }))
+}
+
+#[derive(Deserialize)]
+struct ArtistNameBody {
+    name: String,
+}
+
+/// «Не предлагать исполнителя»: ни в волне, ни в радио, ни в миксах.
+async fn block_artist(State(st): St, h: HeaderMap, Json(b): Json<ArtistNameBody>) -> ApiResult<()> {
+    let u = uid(&st, &h)?;
+    let name = b.name.split(',').next().unwrap_or("").trim().to_string();
+    if name.is_empty() || name.len() > 200 {
+        return Err((StatusCode::BAD_REQUEST, "нужно имя исполнителя".into()));
+    }
+    {
+        let db = st.db.lock().map_err(e500)?;
+        db.execute(
+            "INSERT OR REPLACE INTO blocked_artists(user_id, norm, name, at) VALUES(?1, ?2, ?3, ?4)",
+            params![u, recs::norm_artist(&name), name, recs::now()],
+        )
+        .map_err(e500)?;
+    }
+    forget_mixes(&st, u);
+    Ok(Json(()))
+}
+
+async fn unblock_artist(State(st): St, h: HeaderMap, Json(b): Json<ArtistNameBody>) -> ApiResult<()> {
+    let u = uid(&st, &h)?;
+    {
+        let db = st.db.lock().map_err(e500)?;
+        db.execute("DELETE FROM blocked_artists WHERE user_id=?1 AND norm=?2", params![u, recs::norm_artist(&b.name)])
+            .map_err(e500)?;
+    }
+    forget_mixes(&st, u);
+    Ok(Json(()))
+}
+
+/// Миксы считаются раз в сутки, но скрытое должно пропасть из них сразу.
+fn forget_mixes(st: &AppState, u: i64) {
+    if let Ok(mut m) = st.mixes.lock() {
+        m.remove(&u);
+    }
+}
+
+// ───────────────────────── статистика ─────────────────────────
+
+#[derive(Deserialize)]
+struct StatsQ {
+    period: Option<String>,
+    /// Сдвиг местного времени от UTC в минутах (Москва = 180).
+    tz: Option<i64>,
+    year: Option<i32>,
+}
+
+fn clean_tz(tz: Option<i64>) -> i64 {
+    tz.filter(|t| (-720..=840).contains(t)).unwrap_or(180)
+}
+
+/// Фото исполнителей для первых мест: из страниц YouTube Music (кэш на 6 часов).
+async fn artist_images(st: &AppState, list: &mut [stats::ArtistStat], n: usize) {
+    let names: Vec<String> = list.iter().take(n).map(|a| a.name.clone()).collect();
+    let jobs = names.into_iter().map(|name| async move {
+        let id = yt::resolve_artist(&st.cache, &st.http, &name).await?;
+        let page = st.cache.artist(&st.http, &id).await.ok()?;
+        Some((id, page.thumb.map(|t| yt::thumb_size(&t, 600))))
+    });
+    let found = tokio::time::timeout(std::time::Duration::from_secs(6), futures_util::future::join_all(jobs)).await;
+    if let Ok(found) = found {
+        for (a, f) in list.iter_mut().zip(found) {
+            if let Some((id, image)) = f {
+                a.artist_id = Some(id);
+                a.image = image;
+            }
+        }
+    }
+}
+
+async fn stats_handler(State(st): St, h: HeaderMap, Query(q): Query<StatsQ>) -> ApiResult<stats::Stats> {
+    let u = uid(&st, &h)?;
+    let tz = clean_tz(q.tz);
+    let mut s = {
+        let db = st.db.lock().map_err(e500)?;
+        stats::stats(&db, u, q.period.as_deref().unwrap_or("month"), tz)
+    };
+    artist_images(&st, &mut s.top_artists, 3).await;
+    Ok(Json(s))
+}
+
+/// «Итоги года».
+async fn wrapped_handler(State(st): St, h: HeaderMap, Query(q): Query<StatsQ>) -> ApiResult<stats::Wrapped> {
+    let u = uid(&st, &h)?;
+    let tz = clean_tz(q.tz);
+    let (this_year, _, _) = stats::civil((recs::now() + tz * 60).div_euclid(86400));
+    let year = q.year.filter(|y| (2024..=this_year).contains(y)).unwrap_or(this_year);
+    let mut w = {
+        let db = st.db.lock().map_err(e500)?;
+        stats::wrapped(&db, u, year, tz)
+    };
+    artist_images(&st, &mut w.top_artists, 5).await;
+    Ok(Json(w))
 }
 
 #[derive(Deserialize)]
@@ -1059,13 +1323,19 @@ fn clean_region(r: Option<&str>) -> String {
 async fn top(State(st): St, h: HeaderMap, Query(q): Query<TopQ>) -> ApiResult<Vec<Track>> {
     uid(&st, &h)?;
     let region = clean_region(q.region.as_deref());
+    Ok(Json(chart_cached(&st, &region).await))
+}
+
+/// Недельный чарт страны с кэшем на 6 часов; если YouTube не ответил — прошлый.
+async fn chart_cached(st: &AppState, region: &str) -> Vec<Track> {
+    let region = region.to_string();
     let key = if region.is_empty() { "001".to_string() } else { region.clone() };
 
     let mut stale = None;
     if let Ok(m) = st.top.lock() {
         if let Some((at, v)) = m.get(&key) {
             if at.elapsed() < std::time::Duration::from_secs(6 * 3600) {
-                return Ok(Json(v.clone()));
+                return v.clone();
             }
             stale = Some(v.clone());
         }
@@ -1076,12 +1346,12 @@ async fn top(State(st): St, h: HeaderMap, Query(q): Query<TopQ>) -> ApiResult<Ve
         v = yt::chart_top(&st.http, "").await.unwrap_or_default();
     }
     if v.is_empty() {
-        return Ok(Json(stale.unwrap_or_default()));
+        return stale.unwrap_or_default();
     }
     if let Ok(mut m) = st.top.lock() {
         m.insert(key, (std::time::Instant::now(), v.clone()));
     }
-    Ok(Json(v))
+    v
 }
 
 // ───────────────────────── плейлисты ─────────────────────────
@@ -1413,6 +1683,7 @@ async fn main() -> anyhow::Result<()> {
         admins,
         data: std::path::PathBuf::from(&data),
         started: recs::now(),
+        mixes: Mutex::new(std::collections::HashMap::new()),
     });
     spawn_maintenance(state.clone());
 
@@ -1443,6 +1714,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/lyrics", get(lyrics_handler))
         .route("/api/recs", get(recs_handler))
         .route("/api/wave", get(wave_handler))
+        .route("/api/radio", get(radio_handler))
+        .route("/api/mixes", get(mixes_handler))
+        .route("/api/dislikes", get(dislikes_list).post(dislike))
+        .route("/api/dislikes/{id}", delete(undislike))
+        .route("/api/blocked-artists", post(block_artist).delete(unblock_artist))
+        .route("/api/stats", get(stats_handler))
+        .route("/api/wrapped", get(wrapped_handler))
         .route("/api/top", get(top))
         .route("/api/stream/{id}", get(stream))
         .route("/api/prefetch", post(prefetch))

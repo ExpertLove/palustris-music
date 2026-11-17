@@ -181,7 +181,28 @@ pub fn open(path: &Path) -> anyhow::Result<Connection> {
             peak REAL NOT NULL,
             at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS dislikes(
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            track_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            album TEXT,
+            duration INTEGER NOT NULL DEFAULT 0,
+            thumb TEXT,
+            at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, track_id)
+        );
+        CREATE TABLE IF NOT EXISTS blocked_artists(
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            norm TEXT NOT NULL,
+            name TEXT NOT NULL,
+            at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, norm)
+        );
         "#,
     )?;
+    // Сколько секунд трек на самом деле играл (присылает приложение): для статистики и вкуса.
+    // У старых записей и с сайта — NULL, тогда считаем по длительности.
+    let _ = c.execute("ALTER TABLE history ADD COLUMN secs INTEGER", []);
     Ok(c)
 }

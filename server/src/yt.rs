@@ -41,6 +41,8 @@ pub struct SearchCache {
     all: Cache<SearchAll>,
     artists: Cache<ArtistPage>,
     collections: Cache<Collection>,
+    /// Радио по треку меняется медленно: сутки в кэше, иначе каждая волна дёргала бы YouTube.
+    radios: Cache<Vec<RadioItem>>,
 }
 
 impl Default for SearchCache {
@@ -50,6 +52,7 @@ impl Default for SearchCache {
             all: Cache::new(TTL),
             artists: Cache::new(Duration::from_secs(6 * 3600)),
             collections: Cache::new(Duration::from_secs(6 * 3600)),
+            radios: Cache::new(Duration::from_secs(24 * 3600)),
         }
     }
 }
@@ -97,6 +100,162 @@ impl SearchCache {
         self.collections.put(id, v.clone());
         Ok(v)
     }
+
+    /// Радио YouTube Music от трека (или от исполнителя, если передан `playlist` вида RDEM…).
+    /// Ошибку не пробрасываем: пустой список — просто нет кандидатов от этого зерна.
+    pub async fn radio(&self, http: &Client, video: &str, playlist: Option<&str>) -> Vec<RadioItem> {
+        let key = format!("{video}|{}", playlist.unwrap_or(""));
+        if let Some(v) = self.radios.get(&key) {
+            return v;
+        }
+        match radio(http, video, playlist).await {
+            Ok(v) if !v.is_empty() => {
+                self.radios.put(&key, v.clone());
+                v
+            }
+            Ok(_) => Vec::new(),
+            Err(e) => {
+                eprintln!("radio {video}: {e}");
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// Что за ролик: песня из альбома (ATV), официальный клип (OMV) или загрузка пользователя (UGC).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoKind {
+    Song,
+    Clip,
+    User,
+    Other,
+}
+
+#[derive(Clone, Debug)]
+pub struct RadioItem {
+    pub track: Track,
+    pub kind: VideoKind,
+}
+
+fn video_kind(s: Option<&str>) -> VideoKind {
+    match s {
+        Some("MUSIC_VIDEO_TYPE_ATV") => VideoKind::Song,
+        Some("MUSIC_VIDEO_TYPE_OMV") => VideoKind::Clip,
+        Some("MUSIC_VIDEO_TYPE_UGC") => VideoKind::User,
+        _ => VideoKind::Other,
+    }
+}
+
+pub fn valid_video_id(id: &str) -> bool {
+    id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Бесконечное радио YouTube Music («Up next» с `RDAMVM…`): около 50 похожих треков.
+/// Тот же механизм, что у кнопки «Радио» в YouTube Music, — по совместным прослушиваниям, а не по названию.
+pub async fn radio(http: &Client, video: &str, playlist: Option<&str>) -> Result<Vec<RadioItem>> {
+    if !valid_video_id(video) {
+        bail!("bad video id");
+    }
+    let pl = match playlist {
+        Some(p) if valid_browse_id(p) => p.to_string(),
+        _ => format!("RDAMVM{video}"),
+    };
+    let v = ytm(
+        http,
+        "next",
+        json!({
+            "videoId": video,
+            "playlistId": pl,
+            "params": "wAEB",
+            "isAudioOnly": true,
+            "enablePersistentPlaylistPanel": true,
+            "tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
+            "watchEndpointMusicSupportedConfigs": {"watchEndpointMusicConfig": {
+                "hasPersistentPlaylistPanel": true,
+                "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+            }}
+        }),
+    )
+    .await?;
+    let mut items = Vec::new();
+    collect(&v, "playlistPanelVideoRenderer", &mut items);
+    let mut seen = std::collections::HashSet::new();
+    Ok(items.into_iter().filter_map(parse_panel_item).filter(|r| seen.insert(r.track.id.clone())).collect())
+}
+
+/// Строка очереди «Далее»: «Исполнитель • Альбом • Год» у песен, «Исполнитель • просмотры» у клипов.
+fn parse_panel_item(it: &Value) -> Option<RadioItem> {
+    let id = it["videoId"].as_str()?.to_string();
+    let raw_title = text(&it["title"]).trim().to_string();
+    if raw_title.is_empty() {
+        return None;
+    }
+    let kind = video_kind(
+        it["navigationEndpoint"]["watchEndpoint"]["watchEndpointMusicSupportedConfigs"]["watchEndpointMusicConfig"]
+            ["musicVideoType"]
+            .as_str(),
+    );
+    let mut artists = Vec::new();
+    let mut artist_id = None;
+    let mut album = None;
+    let mut album_id = None;
+    let byline = runs(&it["longBylineText"]);
+    for r in &byline {
+        let t = r["text"].as_str().unwrap_or("");
+        match browse_id(r) {
+            Some(b) if b.starts_with("UC") => {
+                artists.push(t.to_string());
+                artist_id.get_or_insert_with(|| b.to_string());
+            }
+            Some(b) if b.starts_with("MPRE") => {
+                album.get_or_insert_with(|| t.to_string());
+                album_id.get_or_insert_with(|| b.to_string());
+            }
+            _ => {}
+        }
+    }
+    if artists.is_empty() {
+        // У загрузок пользователей исполнитель без ссылки: первый кусок до « • ».
+        let first = byline.first().and_then(|r| r["text"].as_str()).unwrap_or("").trim().to_string();
+        if first.is_empty() {
+            return None;
+        }
+        artists.push(first);
+    }
+    let duration = parse_duration(&text(&it["lengthText"])).unwrap_or(0);
+    let thumb = it["thumbnail"]["thumbnails"]
+        .as_array()
+        .and_then(|a| a.last())
+        .and_then(|t| t["url"].as_str())
+        .map(|u| thumb_size(u, 300));
+    let title = if kind == VideoKind::Song { raw_title } else { clean_title(&raw_title) };
+    Some(RadioItem {
+        track: Track { id, title, artist: artists.join(", "), album, duration, thumb, artist_id, album_id },
+        kind,
+    })
+}
+
+/// «Starboy ft. Daft Punk (Official Video)» → «Starboy ft. Daft Punk»: у клипов в названии служебные приписки.
+pub fn clean_title(t: &str) -> String {
+    const NOISE: &[&str] = &[
+        "official", "video", "audio", "lyric", "visualizer", "visualiser", "клип", "премьера", "mv", "hd", "4k",
+        "текст", "lyrics",
+    ];
+    let mut out = String::new();
+    let mut rest = t;
+    while let Some(start) = rest.find(['(', '[']) {
+        let close = if rest[start..].starts_with('(') { ')' } else { ']' };
+        let Some(len) = rest[start..].find(close) else { break };
+        let inner = rest[start + 1..start + len].to_lowercase();
+        out.push_str(&rest[..start]);
+        if !NOISE.iter().any(|n| inner.split(|c: char| !c.is_alphanumeric()).any(|w| w == *n)) {
+            out.push_str(&rest[start..=start + len]);
+        }
+        rest = &rest[start + len + 1..];
+    }
+    out.push_str(rest);
+    let s = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if s.is_empty() { t.trim().to_string() } else { s }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -142,6 +301,9 @@ pub struct ArtistPage {
     pub singles: Vec<AlbumCard>,
     pub playlists: Vec<AlbumCard>,
     pub similar: Vec<ArtistCard>,
+    /// Радио исполнителя в YouTube Music: (videoId, playlistId RDEM…).
+    #[serde(skip)]
+    pub radio: Option<(String, String)>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -488,6 +650,13 @@ pub async fn artist_page(http: &Client, id: &str) -> Result<ArtistPage> {
     };
     if page.name.is_empty() {
         bail!("artist not found");
+    }
+    let mut we = Vec::new();
+    collect(&h["startRadioButton"], "watchEndpoint", &mut we);
+    if let Some(we) = we.first() {
+        if let (Some(v), Some(p)) = (we["videoId"].as_str(), we["playlistId"].as_str()) {
+            page.radio = Some((v.to_string(), p.to_string()));
+        }
     }
     let sections = v["contents"]["singleColumnBrowseResultsRenderer"]["tabs"][0]["tabRenderer"]["content"]
         ["sectionListRenderer"]["contents"]
