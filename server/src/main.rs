@@ -7,6 +7,7 @@ mod loudness;
 mod lyrics;
 mod mail;
 mod recs;
+mod sources;
 mod stats;
 mod yt;
 
@@ -683,7 +684,9 @@ async fn search(State(st): St, h: HeaderMap, Query(sq): Query<SearchQ>) -> ApiRe
     if sq.kind.as_deref() == Some("songs") && q.len() <= 200 {
         return Ok(Json(st.cache.songs(&st.http, q).await));
     }
-    Ok(Json(st.cache.search(&st.http, q).await))
+    let mut v = st.cache.search(&st.http, q).await;
+    sources::augment(q, &mut v, false).await;
+    Ok(Json(v))
 }
 
 /// Поиск по всем типам: треки, исполнители, альбомы, плейлисты.
@@ -694,11 +697,13 @@ async fn search_all(State(st): St, h: HeaderMap, Query(sq): Query<SearchQ>) -> A
     if q.is_empty() || q.len() > 200 {
         return Ok(Json(yt::SearchAll::default()));
     }
-    st.cache
+    let mut out = st
+        .cache
         .search_all(&st.http, q)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    sources::augment(q, &mut out.tracks, true).await;
+    Ok(Json(out))
 }
 
 #[derive(Deserialize)]
@@ -788,6 +793,25 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
     if let Err(e) = uid(&st, req.headers()) {
         return e.into_response();
     }
+    if let Some(rest) = id.strip_prefix("x-sc:") {
+        return match sources::soundcloud_file(&st.audio.dir, rest).await {
+            Ok(p) => serve_file(p, req).await,
+            Err(e) => match fallback_audio(&st, &q, &id, req).await {
+                Some(r) => r,
+                None => (StatusCode::BAD_GATEWAY, e).into_response(),
+            },
+        };
+    }
+    if sources::is_external(&id) {
+        let r = sources::proxy(&id, req.headers()).await;
+        if r.status().is_success() {
+            return r;
+        }
+        return match fallback_audio(&st, &q, &id, req).await {
+            Some(f) => f,
+            None => r,
+        };
+    }
     if !audio::valid_id(&id) {
         return (StatusCode::BAD_REQUEST, "bad id").into_response();
     }
@@ -803,13 +827,21 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
     }
     let ready = match resolve_audio(&st, &id, &q).await {
         Ok(r) => r,
-        Err(resp) => return resp,
+        Err(resp) => {
+            return match fallback_audio(&st, &q, &id, req).await {
+                Some(r) => r,
+                None => resp,
+            }
+        }
     };
     let Some(k) = kbps else {
         return match ready {
             audio::Ready::Progressive(job) => audio::serve_progressive(job, req.headers()).await,
             audio::Ready::File(p) => serve_file(p, req).await,
-            audio::Ready::Failed(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+            audio::Ready::Failed(e) => match fallback_audio(&st, &q, &id, req).await {
+                Some(r) => r,
+                None => (StatusCode::BAD_GATEWAY, e).into_response(),
+            },
         };
     };
     let src = match ready {
@@ -826,6 +858,29 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
             eprintln!("compact {id}@{k}: {e}");
             (StatusCode::BAD_GATEWAY, "не удалось подготовить компактную версию").into_response()
         }
+    }
+}
+
+/// Основной источник не отдал звук — пробуем тот же трек в другом каталоге.
+async fn fallback_audio(st: &Arc<AppState>, q: &StreamQ, failed: &str, req: Request) -> Option<Response> {
+    let t = sources::fallback(
+        &st.audio.dir,
+        q.a.as_deref().unwrap_or_default(),
+        q.t.as_deref().unwrap_or_default(),
+        failed,
+    )
+    .await?;
+    if let Some(rest) = t.id.strip_prefix("x-sc:") {
+        return match sources::soundcloud_file(&st.audio.dir, rest).await {
+            Ok(p) => Some(serve_file(p, req).await),
+            Err(_) => None,
+        };
+    }
+    let r = sources::proxy(&t.id, req.headers()).await;
+    if r.status().is_success() {
+        Some(r)
+    } else {
+        None
     }
 }
 
@@ -1155,7 +1210,7 @@ async fn mixes_handler(State(st): St, h: HeaderMap) -> ApiResult<recs::Mixes> {
 /// «Не нравится»: трек больше не попадёт ни в волну, ни в радио, исполнитель — реже. Лайк снимается.
 async fn dislike(State(st): St, h: HeaderMap, Json(t): Json<Track>) -> ApiResult<()> {
     let u = uid(&st, &h)?;
-    if t.id.is_empty() || t.id.len() > 64 {
+    if t.id.is_empty() || t.id.len() > 200 {
         return Err((StatusCode::BAD_REQUEST, "bad track".into()));
     }
     {
