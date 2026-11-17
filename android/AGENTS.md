@@ -113,8 +113,11 @@ ru.palustris.music
 
 Navigation keys: Home, Search, Library(tab), Settings, Artist(id?, name), Collection(id), Playlist(id), Equalizer,
 Account, Mood(id), Moods, Chart, Shared(slug). The nav bar is hidden on Settings, Equalizer and Account.
-Detail screens use `hiltViewModel(key = ...)` in the activity store (no per-entry ViewModel decorator, so tab state
-survives switching). `LocalNavigator` opens pages from anywhere, including the full player (it collapses first).
+Detail screens use `hiltViewModel(key = ...)` in a **per-session ViewModelStore** (no per-entry ViewModel decorator,
+so tab state survives switching). The store is kept in MainViewModel keyed by the token (survives rotation) and
+cleared on sign out / another login, so a second account never sees the previous one's home or history; Hilt's
+factory comes from the activity (`SessionViewModelStoreOwner` in MusicRoot). `LocalNavigator` opens pages from
+anywhere, including the full player (it collapses first).
 
 Unidirectional data flow: ViewModel exposes `StateFlow`, UI collects with `collectAsStateWithLifecycle()`.
 The UI talks to the player only through `PlayerConnection`. It connects in MainActivity.onStart and releases
@@ -172,6 +175,8 @@ Also verified (0.4.0), debug and release (R8):
   force-stop + app start; release: like through the outbox, widget actions, artwork provider;
 - `LibraryBrowseTest` (car catalog): root, 20 moods, playlist paging, tap 2nd track → whole playlist from index 1,
   search, «Моя волна».
+- account deletion on a throwaway account: confirm by email → server 401 for that login, login screen, offline data and
+  downloads wiped; then logging in to another account in the same process shows only that account's data.
 
 Unit tests (38): PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
 wrap on overload), LRC parser, CrossfadeProcessor (8: blend shape, plan revoked → tail played out, seek and skip

@@ -3,7 +3,15 @@ package ru.palustris.music.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
+import androidx.lifecycle.HasDefaultViewModelProviderFactory
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.CreationExtras
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -131,10 +139,18 @@ fun MusicRoot(vm: MainViewModel) {
 
   MusicTheme(seed) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-      when (session) {
+      when (val s = session) {
         Session.Loading -> Unit // держим системную заставку
-        Session.LoggedOut -> AuthScreen()
-        is Session.LoggedIn -> MainScaffold(vm)
+        Session.LoggedOut -> {
+          LaunchedEffect(Unit) { vm.dropSessionViewModels() }
+          AuthScreen()
+        }
+        is Session.LoggedIn -> {
+          val activity = LocalActivity.current as ComponentActivity
+          val store = vm.viewModelStoreFor(s.token)
+          val owner = remember(store, activity) { SessionViewModelStoreOwner(store, activity) }
+          CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { MainScaffold(vm) }
+        }
       }
     }
   }
@@ -355,4 +371,14 @@ private fun StatusBarScrim() {
       .windowInsetsTopHeight(WindowInsets.statusBars)
       .background(Brush.verticalGradient(listOf(bg.copy(alpha = 0.72f), bg.copy(alpha = 0.35f))))
   )
+}
+
+/** Хранилище ViewModel-ей сессии; фабрика Hilt и extras берутся у активити. */
+private class SessionViewModelStoreOwner(override val viewModelStore: ViewModelStore, private val activity: ComponentActivity) :
+  ViewModelStoreOwner, HasDefaultViewModelProviderFactory {
+  override val defaultViewModelProviderFactory: ViewModelProvider.Factory
+    get() = activity.defaultViewModelProviderFactory
+
+  override val defaultViewModelCreationExtras: CreationExtras
+    get() = activity.defaultViewModelCreationExtras
 }

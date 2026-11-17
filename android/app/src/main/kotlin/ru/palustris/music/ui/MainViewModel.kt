@@ -1,6 +1,7 @@
 package ru.palustris.music.ui
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -67,6 +68,27 @@ constructor(
 
   fun consumeLink() {
     _openLink.value = null
+  }
+
+  /**
+   * ViewModel-и экранов живут, пока жива сессия: другой аккаунт не увидит чужую главную или историю.
+   * Хранилище держим здесь, а не в композиции, чтобы оно пережило поворот экрана.
+   */
+  private var sessionVms: Pair<String, ViewModelStore>? = null
+
+  fun viewModelStoreFor(token: String): ViewModelStore {
+    sessionVms?.let { (t, store) -> if (t == token) return store else store.clear() }
+    return ViewModelStore().also { sessionVms = token to it }
+  }
+
+  /** Вызывается, когда экраны сессии уже ушли из композиции (показан экран входа). */
+  fun dropSessionViewModels() {
+    sessionVms?.second?.clear()
+    sessionVms = null
+  }
+
+  override fun onCleared() {
+    dropSessionViewModels()
   }
 
   val sleep: StateFlow<SleepState> = sleepTimer.state
