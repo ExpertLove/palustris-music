@@ -47,6 +47,19 @@ interface Navigator {
 
   fun openEqualizer()
 
+  fun openMood(id: String)
+
+  fun openMoods()
+
+  /** Чарт недели целиком, с выбором страны. */
+  fun openChart()
+
+  fun openAccount()
+
+  fun openSettings()
+
+  fun openLibrary(tab: ru.palustris.music.ui.library.LibraryTab)
+
   /** Выбрать плейлист, куда добавить трек. */
   fun addToPlaylist(track: Track)
 }

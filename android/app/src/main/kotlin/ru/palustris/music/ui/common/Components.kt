@@ -164,6 +164,8 @@ fun TrackRow(
   subtitle: String? = null,
   leading: (@Composable () -> Unit)? = null,
   extra: List<ExtraAction> = emptyList(),
+  /** Перед меню: например, ручка для перетаскивания в плейлисте. */
+  trailing: (@Composable () -> Unit)? = null,
 ) {
   val marks = LocalTrackMarks.current
   val actions = LocalTrackActions.current
@@ -229,6 +231,7 @@ fun TrackRow(
         modifier = Modifier.padding(horizontal = 4.dp),
       )
     }
+    trailing?.invoke()
     Box {
       IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "Ещё") }
       TrackMenu(track, expanded = menu, onDismiss = { menu = false }, liked = track.id in marks.liked, dl = dl, actions = actions, extra = extra)

@@ -1,5 +1,6 @@
 package ru.palustris.music
 
+import android.content.Intent
 import android.os.Bundle
 import android.graphics.Color
 import androidx.activity.ComponentActivity
@@ -30,6 +31,24 @@ class MainActivity : ComponentActivity() {
       navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
     )
     setContent { MusicRoot(vm) }
+    // После поворота экрана ссылка уже обработана.
+    if (savedInstanceState == null) handleLink(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    handleLink(intent)
+  }
+
+  /** `https://music.palustris.ru/s/{slug}` — плейлист, которым поделились. Остальное игнорируем. */
+  private fun handleLink(intent: Intent?) {
+    if (intent?.action != Intent.ACTION_VIEW) return
+    val uri = intent.data ?: return
+    val segments = uri.pathSegments
+    if (uri.scheme != "https" || uri.host != "music.palustris.ru" || segments.size != 2 || segments[0] != "s") return
+    val slug = segments[1]
+    // Как на сервере: только буквы и цифры, не длиннее 20.
+    if (slug.length in 1..20 && slug.all { it.isLetterOrDigit() && it.code < 128 }) vm.openLink(slug)
   }
 
   override fun onStart() {

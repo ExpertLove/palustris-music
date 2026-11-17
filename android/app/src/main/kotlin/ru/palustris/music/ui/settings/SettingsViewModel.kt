@@ -17,13 +17,27 @@ import ru.palustris.music.core.prefs.Session
 import ru.palustris.music.core.prefs.SessionStore
 import ru.palustris.music.core.prefs.Settings
 import ru.palustris.music.core.prefs.SettingsStore
+import ru.palustris.music.core.model.Me
+import ru.palustris.music.data.AccountRepository
+import ru.palustris.music.data.Outbox
 import ru.palustris.music.media.AudioStorage
 import ru.palustris.music.media.StorageUsage
 
 @HiltViewModel
 class SettingsViewModel
 @Inject
-constructor(private val store: SettingsStore, private val storage: AudioStorage, session: SessionStore) : ViewModel() {
+constructor(
+  private val store: SettingsStore,
+  private val storage: AudioStorage,
+  session: SessionStore,
+  account: AccountRepository,
+  outbox: Outbox,
+) : ViewModel() {
+  val me: StateFlow<Me?> = account.me
+
+  /** Сколько изменений ждёт связи. */
+  val pending: StateFlow<Int> = outbox.pending
+
   val settings: StateFlow<Settings> =
     store.settings.map { it ?: Settings() }.stateIn(viewModelScope, SharingStarted.Eagerly, store.current)
 

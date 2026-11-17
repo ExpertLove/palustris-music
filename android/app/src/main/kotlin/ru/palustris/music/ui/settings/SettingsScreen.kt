@@ -22,7 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
@@ -52,6 +52,9 @@ import ru.palustris.music.BuildConfig
 import ru.palustris.music.core.prefs.DownloadQuality
 import ru.palustris.music.core.prefs.Settings
 import ru.palustris.music.media.StorageUsage
+import ru.palustris.music.ui.account.Avatar
+import ru.palustris.music.ui.common.GroupCard
+import ru.palustris.music.ui.common.GroupHeader
 import ru.palustris.music.ui.common.formatBytes
 import ru.palustris.music.ui.common.formatMb
 import ru.palustris.music.ui.common.pluralTracks
@@ -60,15 +63,16 @@ import ru.palustris.music.ui.common.pluralTracks
 fun SettingsScreen(
   contentPadding: PaddingValues,
   onBack: () -> Unit,
-  onLogout: () -> Unit,
+  onOpenAccount: () -> Unit,
   onOpenEqualizer: () -> Unit,
   vm: SettingsViewModel = hiltViewModel(),
 ) {
   val settings by vm.settings.collectAsStateWithLifecycle()
   val usage by vm.usage.collectAsStateWithLifecycle()
   val email by vm.email.collectAsStateWithLifecycle()
+  val me by vm.me.collectAsStateWithLifecycle()
+  val pending by vm.pending.collectAsStateWithLifecycle()
   var confirmRemove by remember { mutableStateOf(false) }
-  var confirmLogout by remember { mutableStateOf(false) }
 
   LazyColumn(contentPadding = contentPadding) {
     item {
@@ -78,9 +82,9 @@ fun SettingsScreen(
       }
     }
 
-    item { Header("Звук") }
+    item { GroupHeader("Звук") }
     item {
-      Card(onClick = onOpenEqualizer) {
+      GroupCard(onClick = onOpenEqualizer) {
         Row(verticalAlignment = Alignment.CenterVertically) {
           Column(Modifier.weight(1f)) {
             Text("Эквалайзер", style = MaterialTheme.typography.titleMedium)
@@ -91,7 +95,7 @@ fun SettingsScreen(
       }
     }
     item {
-      Card(onClick = { vm.setNormalize(!settings.normalize) }) {
+      GroupCard(onClick = { vm.setNormalize(!settings.normalize) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
           Column(Modifier.weight(1f)) {
             Text("Выравнивать громкость", style = MaterialTheme.typography.titleMedium)
@@ -106,7 +110,7 @@ fun SettingsScreen(
       }
     }
     item {
-      Card {
+      GroupCard {
         Text("Плавный переход", style = MaterialTheme.typography.titleMedium)
         Text(
           "Конец трека плавно перетекает в начало следующего",
@@ -126,10 +130,10 @@ fun SettingsScreen(
       }
     }
 
-    item { Header("Память телефона") }
-    item { Card { StorageCard(usage, settings) } }
+    item { GroupHeader("Память телефона") }
+    item { GroupCard { StorageCard(usage, settings) } }
     item {
-      Card {
+      GroupCard {
         Text("Кэш прослушанного", style = MaterialTheme.typography.titleMedium)
         Text(
           "Треки, которые вы слушали, хранятся на телефоне и повторно играют без интернета. " +
@@ -151,9 +155,9 @@ fun SettingsScreen(
       }
     }
 
-    item { Header("Скачивание") }
+    item { GroupHeader("Скачивание") }
     item {
-      Card {
+      GroupCard {
         Text("Качество скачанных треков", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp))
         DownloadQuality.entries.forEach { q ->
           Row(
@@ -185,7 +189,7 @@ fun SettingsScreen(
       }
     }
     item {
-      Card(onClick = { vm.setWifiOnly(!settings.wifiOnly) }) {
+      GroupCard(onClick = { vm.setWifiOnly(!settings.wifiOnly) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
           Column(Modifier.weight(1f)) {
             Text("Скачивать только по Wi‑Fi", style = MaterialTheme.typography.titleMedium)
@@ -201,7 +205,7 @@ fun SettingsScreen(
     }
     if ((usage?.downloadsCount ?: 0) > 0) {
       item {
-        Card {
+        GroupCard {
           OutlinedButton(
             onClick = { confirmRemove = true },
             modifier = Modifier.fillMaxWidth(),
@@ -213,15 +217,21 @@ fun SettingsScreen(
       }
     }
 
-    item { Header("Аккаунт") }
+    item { GroupHeader("Аккаунт") }
     item {
-      Card(onClick = { confirmLogout = true }) {
+      GroupCard(onClick = onOpenAccount) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-          Column(Modifier.weight(1f)) {
-            Text(email, style = MaterialTheme.typography.titleMedium)
-            Text("Выйти из аккаунта", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Avatar(me?.name?.ifBlank { null } ?: email, Modifier.size(44.dp))
+          Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Text(me?.name?.ifBlank { null } ?: email, style = MaterialTheme.typography.titleMedium)
+            Text(
+              if (pending > 0) "Ждут отправки на сервер: ${pending}. Уйдут, когда появится связь"
+              else "Профиль, пароль, устройства",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
           }
-          Icon(Icons.AutoMirrored.Rounded.Logout, null)
+          Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null)
         }
       }
     }
@@ -248,45 +258,6 @@ fun SettingsScreen(
       },
       dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Отмена") } },
     )
-  }
-  if (confirmLogout) {
-    AlertDialog(
-      onDismissRequest = { confirmLogout = false },
-      title = { Text("Выйти из аккаунта?") },
-      text = { Text("Скачанные треки останутся на телефоне.") },
-      confirmButton = {
-        TextButton(onClick = {
-          confirmLogout = false
-          onLogout()
-        }) { Text("Выйти") }
-      },
-      dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Отмена") } },
-    )
-  }
-}
-
-@Composable
-private fun Header(text: String) {
-  Text(
-    text,
-    style = MaterialTheme.typography.labelLarge,
-    color = MaterialTheme.colorScheme.primary,
-    modifier = Modifier.padding(start = 28.dp, top = 24.dp, bottom = 8.dp),
-  )
-}
-
-@Composable
-private fun Card(onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
-  Surface(
-    color = MaterialTheme.colorScheme.surfaceContainer,
-    shape = RoundedCornerShape(28.dp),
-    modifier =
-      Modifier.fillMaxWidth()
-        .padding(horizontal = 16.dp, vertical = 4.dp)
-        .clip(RoundedCornerShape(28.dp))
-        .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-  ) {
-    Column(Modifier.padding(20.dp)) { content() }
   }
 }
 

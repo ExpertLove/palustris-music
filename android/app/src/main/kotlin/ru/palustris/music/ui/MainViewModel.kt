@@ -23,7 +23,10 @@ import ru.palustris.music.core.prefs.Session
 import ru.palustris.music.core.prefs.SessionStore
 import ru.palustris.music.core.prefs.SettingsStore
 import ru.palustris.music.core.model.PlaylistRow
+import ru.palustris.music.data.AccountRepository
 import ru.palustris.music.data.LibraryRepository
+import ru.palustris.music.data.OfflineFiles
+import ru.palustris.music.data.Outbox
 import ru.palustris.music.data.PlaylistsRepository
 import ru.palustris.music.media.SleepState
 import ru.palustris.music.media.SleepTimer
@@ -48,8 +51,23 @@ constructor(
   private val api: MusicApi,
   private val playlistsRepo: PlaylistsRepository,
   private val sleepTimer: SleepTimer,
+  private val account: AccountRepository,
+  private val outbox: Outbox,
+  private val files: OfflineFiles,
   equalizer: EqualizerStore,
 ) : ViewModel(), TrackActions, PlayerControls {
+
+  /** Ссылка на плейлист (`/s/{slug}`), которую открыли из другого приложения. */
+  private val _openLink = MutableStateFlow<String?>(null)
+  val openLink: StateFlow<String?> = _openLink.asStateFlow()
+
+  fun openLink(slug: String) {
+    _openLink.value = slug
+  }
+
+  fun consumeLink() {
+    _openLink.value = null
+  }
 
   val sleep: StateFlow<SleepState> = sleepTimer.state
 
@@ -84,6 +102,7 @@ constructor(
   init {
     viewModelScope.launch {
       session.filterIsInstance<Session.LoggedIn>().map { it.token }.distinctUntilChanged().collect {
+        launch { account.refresh() }
         library.refresh()
         playlistsRepo.refresh()
       }
@@ -151,9 +170,8 @@ constructor(
 
   fun addToPlaylist(p: PlaylistRow, track: Track) {
     _pickPlaylistFor.value = null
-    viewModelScope.launch {
-      playlistsRepo.add(p.id, track).fold({ _messages.send("Добавлен в «${p.name}»") }, { _messages.send(it.message ?: "Не получилось") })
-    }
+    playlistsRepo.add(p.id, track)
+    _messages.trySend("Добавлен в «${p.name}»")
   }
 
   fun createPlaylistWith(name: String, track: Track) {
@@ -170,11 +188,30 @@ constructor(
   fun logout() {
     viewModelScope.launch {
       apiCall { api.logout() }
-      player.stop()
-      library.clear()
-      playlistsRepo.clear()
-      sleepTimer.cancel()
-      sessionStore.clear()
+      signOut(wipeDownloads = false)
     }
+  }
+
+  /** Аккаунт удалён на сервере: стираем с телефона и его данные, и скачанные треки. */
+  fun onAccountDeleted() {
+    viewModelScope.launch {
+      signOut(wipeDownloads = true)
+      _messages.send("Аккаунт удалён")
+    }
+  }
+
+  private suspend fun signOut(wipeDownloads: Boolean) {
+    player.stop()
+    sleepTimer.cancel()
+    outbox.clear()
+    library.clear()
+    playlistsRepo.clear()
+    account.clear()
+    files.clearAll()
+    if (wipeDownloads) {
+      storage.removeAll()
+      storage.clearListeningCache()
+    }
+    sessionStore.clear()
   }
 }

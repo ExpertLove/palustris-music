@@ -25,6 +25,13 @@ import ru.palustris.music.core.model.Loudness
 import ru.palustris.music.core.model.Me
 import ru.palustris.music.core.model.SearchAll
 import ru.palustris.music.core.model.Track
+import ru.palustris.music.core.model.ChangePasswordBody
+import ru.palustris.music.core.model.ChangePasswordResp
+import ru.palustris.music.core.model.ProfileBody
+import ru.palustris.music.core.model.RemovedResp
+import ru.palustris.music.core.model.ResendResp
+import ru.palustris.music.core.model.ShareResp
+import ru.palustris.music.core.model.SharedPlaylist
 
 /** Бэкенд music.palustris.ru, см. android/docs/API.md. */
 interface MusicApi {
@@ -38,11 +45,30 @@ interface MusicApi {
 
   @GET("api/me") suspend fun me(): Me
 
+  @POST("api/profile") suspend fun setProfile(@Body body: ProfileBody)
+
+  @POST("api/password/change") suspend fun changePassword(@Body body: ChangePasswordBody): ChangePasswordResp
+
+  @POST("api/logout-others") suspend fun logoutOthers(): RemovedResp
+
+  /** Письмо для подтверждения почты: не чаще раза в минуту. */
+  @POST("api/resend") suspend fun resendVerification(): ResendResp
+
+  /** Удаление аккаунта со всеми лайками, плейлистами и историей. */
+  @DELETE("api/account") suspend fun deleteAccount()
+
   @GET("api/wave") suspend fun wave(): List<Track>
 
-  @GET("api/top") suspend fun top(): List<Track>
+  /** Персональные рекомендации «Для вас». */
+  @GET("api/recs") suspend fun recs(): List<Track>
+
+  /** Чарт недели. `region` — две латинские буквы, пусто — весь мир. */
+  @GET("api/top") suspend fun top(@Query("region") region: String? = null): List<Track>
 
   @GET("api/search/all") suspend fun search(@Query("q") query: String): SearchAll
+
+  /** Только треки: для подборок по настроению. */
+  @GET("api/search") suspend fun searchTracks(@Query("q") query: String): List<Track>
 
   @GET("api/likes") suspend fun likes(): List<Track>
 
@@ -83,4 +109,12 @@ interface MusicApi {
   @POST("api/playlists/{id}/items") suspend fun addToPlaylist(@Path("id") id: Long, @Body track: Track)
 
   @DELETE("api/playlists/{id}/items/{track}") suspend fun removeFromPlaylist(@Path("id") id: Long, @Path("track") trackId: String)
+
+  /** Открыть доступ по ссылке: `https://music.palustris.ru/s/{share}`. Повторный вызов отдаёт ту же ссылку. */
+  @POST("api/playlists/{id}/share") suspend fun sharePlaylist(@Path("id") id: Long): ShareResp
+
+  @DELETE("api/playlists/{id}/share") suspend fun unsharePlaylist(@Path("id") id: Long)
+
+  /** Чужой плейлист по ссылке, вход не нужен. */
+  @GET("api/shared/{slug}") suspend fun shared(@Path("slug") slug: String): SharedPlaylist
 }

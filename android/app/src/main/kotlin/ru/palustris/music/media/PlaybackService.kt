@@ -43,6 +43,8 @@ import ru.palustris.music.core.model.IdsBody
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
 import ru.palustris.music.core.prefs.SettingsStore
+import ru.palustris.music.data.Outbox
+import ru.palustris.music.data.PendingOp
 import ru.palustris.music.media.audio.CrossfadePlan
 import ru.palustris.music.media.audio.CrossfadeProcessor
 import ru.palustris.music.media.audio.LoudnessProcessor
@@ -66,6 +68,7 @@ class PlaybackService : MediaSessionService() {
   @Inject lateinit var sleepTimer: SleepTimer
   @Inject lateinit var loudness: LoudnessStore
   @Inject lateinit var settings: SettingsStore
+  @Inject lateinit var outbox: Outbox
 
   private var session: MediaSession? = null
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -305,7 +308,8 @@ class PlaybackService : MediaSessionService() {
       val dur = track.duration * 1000
       val listened = played >= 30_000 || (dur > 0 && played >= dur / 2)
       if (!listened && !(manual && played < 15_000)) return
-      scope.launch { apiCall { if (listened) api.history(track) else api.skip(track) } }
+      // Прослушивание ждёт сети в очереди: без него «Моя волна» не узнает, что слушали в метро.
+      if (listened) outbox.add(PendingOp.Listened(track)) else scope.launch { apiCall { api.skip(track) } }
     }
 
     /** Сервер заранее скачивает следующие треки, чтобы они стартовали без паузы. */

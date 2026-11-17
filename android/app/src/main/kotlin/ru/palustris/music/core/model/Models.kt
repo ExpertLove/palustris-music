@@ -55,15 +55,38 @@ data class Creds(
 
 @Serializable data class LoginResp(val token: String, val email: String)
 
+/** Профиль из `/api/me`. `created` — unix-время регистрации, `sessions` — на скольких устройствах выполнен вход. */
+@Immutable
 @Serializable
 data class Me(
   val email: String,
   val name: String = "",
   val verified: Boolean = false,
+  val admin: Boolean = false,
+  val genres: List<String> = emptyList(),
+  val created: Long = 0,
   val likes: Int = 0,
   val playlists: Int = 0,
   val plays: Int = 0,
+  val sessions: Int = 1,
 )
+
+/** Сервер заменяет имя и жанры целиком: отправлять нужно оба поля. */
+@Serializable data class ProfileBody(val name: String, val genres: List<String>)
+
+@Serializable data class ChangePasswordBody(val old: String, val new: String)
+
+@Serializable data class ChangePasswordResp(val ok: Boolean = true, val loggedOut: Int = 0)
+
+@Serializable data class RemovedResp(val removed: Int = 0)
+
+@Serializable data class ResendResp(val verified: Boolean = false, val letterSent: Boolean = false)
+
+@Serializable data class ShareResp(val share: String)
+
+/** Плейлист по публичной ссылке `/s/{slug}`. */
+@Serializable
+data class SharedPlaylist(val name: String, val owner: String = "", val share: String = "", val items: List<Track> = emptyList())
 
 @Serializable data class EmailBody(val email: String)
 

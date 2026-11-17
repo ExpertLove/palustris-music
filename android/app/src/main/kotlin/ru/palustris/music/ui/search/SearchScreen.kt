@@ -48,6 +48,11 @@ import ru.palustris.music.ui.common.LocalTrackActions
 import ru.palustris.music.ui.common.MessageState
 import ru.palustris.music.ui.common.SectionTitle
 import ru.palustris.music.ui.common.TrackRow
+import ru.palustris.music.ui.moods.MOODS
+import ru.palustris.music.ui.moods.MoodCard
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 
 @Composable
 fun SearchScreen(contentPadding: PaddingValues, vm: SearchViewModel = hiltViewModel()) {
@@ -87,14 +92,16 @@ fun SearchScreen(contentPadding: PaddingValues, vm: SearchViewModel = hiltViewMo
     when {
       ui.loading && result == null -> item { LoadingState() }
       ui.error != null -> item { MessageState("Поиск не удался", ui.error) }
-      result == null ->
-        item {
-          MessageState(
-            "Что послушаем?",
-            "Ищите по названию песни или имени исполнителя",
-            icon = Icons.Rounded.Search,
-          )
+      result == null -> {
+        // Пока ничего не ищут: подборки по настроению, по две в ряд.
+        item { SectionTitle("Настроение") }
+        items(MOODS.chunked(2), key = { row -> "moods:" + row.first().id }) { row ->
+          Row(Modifier.padding(horizontal = 16.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            row.forEach { m -> MoodCard(m, onClick = { nav.openMood(m.id) }, modifier = Modifier.weight(1f).height(104.dp), compact = true) }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+          }
         }
+      }
       result.tracks.isEmpty() && result.artists.isEmpty() ->
         item { MessageState("Ничего не нашлось", "Попробуйте написать иначе", icon = Icons.Rounded.SearchOff) }
       else -> {

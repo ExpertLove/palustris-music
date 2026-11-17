@@ -128,6 +128,11 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.coil.network.okhttp)
   implementation(libs.timber)
+  implementation(libs.reorderable)
+
+  // Виджет на главный экран
+  implementation(libs.androidx.glance.appwidget)
+  implementation(libs.androidx.glance.material3)
 
   // Tests
   testImplementation(libs.junit)

@@ -36,6 +36,8 @@ data class Settings(
   val normalize: Boolean = true,
   /** Плавный переход между треками, секунды; 0 — выключен. */
   val crossfadeSec: Int = 0,
+  /** Страна чарта: две буквы, "" — весь мир, `null` — по языку телефона. */
+  val region: String? = null,
 ) {
   companion object {
     const val DEFAULT_CACHE_MB = 256
@@ -53,6 +55,7 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   private val wifiKey = booleanPreferencesKey("wifi_only")
   private val normalizeKey = booleanPreferencesKey("normalize")
   private val crossfadeKey = intPreferencesKey("crossfade_sec")
+  private val regionKey = stringPreferencesKey("chart_region")
 
   /** `null`, пока DataStore не прочитан: кэш не должен чистить себя по лимиту по умолчанию. */
   val settings: StateFlow<Settings?> =
@@ -64,6 +67,7 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
           wifiOnly = p[wifiKey] ?: false,
           normalize = p[normalizeKey] ?: true,
           crossfadeSec = (p[crossfadeKey] ?: 0).coerceIn(0, Settings.CROSSFADE_OPTIONS_SEC.max()),
+          region = p[regionKey],
         )
       }
       .stateIn(scope, SharingStarted.Eagerly, null)
@@ -80,4 +84,6 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   suspend fun setNormalize(on: Boolean) = context.settingsStore.edit { it[normalizeKey] = on }
 
   suspend fun setCrossfade(sec: Int) = context.settingsStore.edit { it[crossfadeKey] = sec }
+
+  suspend fun setRegion(code: String) = context.settingsStore.edit { it[regionKey] = code }
 }

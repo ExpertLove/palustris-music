@@ -16,7 +16,9 @@ import ru.palustris.music.core.model.HistoryItem
 import ru.palustris.music.core.model.PlaylistRow
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
+import kotlinx.serialization.builtins.ListSerializer
 import ru.palustris.music.data.LibraryRepository
+import ru.palustris.music.data.OfflineFiles
 import ru.palustris.music.data.PlaylistsRepository
 import ru.palustris.music.media.AudioStorage
 import ru.palustris.music.media.TrackDownload
@@ -29,6 +31,7 @@ constructor(
   private val storage: AudioStorage,
   private val playlistsRepo: PlaylistsRepository,
   private val api: MusicApi,
+  private val files: OfflineFiles,
 ) : ViewModel() {
   val playlists: StateFlow<List<PlaylistRow>?> = playlistsRepo.list
 
@@ -37,7 +40,13 @@ constructor(
 
   fun refreshHistory() {
     viewModelScope.launch {
-      apiCall { api.history(150) }.onSuccess { _history.value = it }.onFailure { if (_history.value == null) _error.value = it.message }
+      if (_history.value == null) _history.value = files.read(HISTORY_FILE, ListSerializer(HistoryItem.serializer()))
+      apiCall { api.history(150) }
+        .onSuccess {
+          _history.value = it
+          files.write(HISTORY_FILE, ListSerializer(HistoryItem.serializer()), it)
+        }
+        .onFailure { if (_history.value == null) _history.value = emptyList() }
     }
   }
 
@@ -73,5 +82,9 @@ constructor(
       playlistsRepo.refresh()
       _refreshing.value = false
     }
+  }
+
+  private companion object {
+    const val HISTORY_FILE = "history.json"
   }
 }

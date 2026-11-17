@@ -28,6 +28,9 @@ serialization = "1.13.0"
 coroutines = "1.11.0"
 coil = "3.6.3"
 timber = "5.0.1"
+# UI extras
+reorderable = "3.1.0"
+glance = "1.2.0"
 # Tests
 androidxTest = "1.7.0"
 androidxTestExt = "1.3.0"
@@ -80,6 +83,10 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
+# Перетаскивание в списках (Calvin-LL/Reorderable, Apache-2.0)
+reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
+androidx-glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "glance" }
 
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTest" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }

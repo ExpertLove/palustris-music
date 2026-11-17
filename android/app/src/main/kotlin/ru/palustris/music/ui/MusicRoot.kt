@@ -13,7 +13,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,7 +65,12 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.serialization.Serializable
 import ru.palustris.music.core.prefs.Session
+import ru.palustris.music.ui.account.AccountScreen
 import ru.palustris.music.ui.auth.AuthScreen
+import ru.palustris.music.ui.chart.ChartScreen
+import ru.palustris.music.ui.moods.MoodScreen
+import ru.palustris.music.ui.moods.MoodsScreen
+import ru.palustris.music.ui.playlists.SharedPlaylistScreen
 import ru.palustris.music.ui.common.LocalTrackActions
 import ru.palustris.music.ui.common.LocalTrackMarks
 import ru.palustris.music.ui.common.LocalNavigator
@@ -94,6 +105,17 @@ import ru.palustris.music.ui.theme.MusicTheme
 @Serializable data class PlaylistKey(val id: Long) : NavKey
 
 @Serializable data object EqualizerKey : NavKey
+
+@Serializable data object AccountKey : NavKey
+
+@Serializable data class MoodKey(val id: String) : NavKey
+
+@Serializable data object MoodsKey : NavKey
+
+@Serializable data object ChartKey : NavKey
+
+/** Чужой плейлист по ссылке `https://music.palustris.ru/s/{slug}`. */
+@Serializable data class SharedKey(val slug: String) : NavKey
 
 private enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
   Home("Главная", Icons.Outlined.Home, Icons.Rounded.Home),
@@ -161,7 +183,7 @@ private fun MainScaffold(vm: MainViewModel) {
       is LibraryKey -> Tab.Library
       null -> Tab.Home
       else -> Tab.Home
-    }.takeIf { top !is SettingsKey && top !is EqualizerKey }
+    }.takeIf { top !is SettingsKey && top !is EqualizerKey && top !is AccountKey }
   fun select(tab: Tab, libraryTab: LibraryTab = LibraryTab.Likes) {
     // «Главная» — корень; другие вкладки лежат поверх неё, и «назад» ведёт на главную.
     while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
@@ -187,9 +209,32 @@ private fun MainScaffold(vm: MainViewModel) {
 
         override fun openEqualizer() = push(EqualizerKey)
 
+        override fun openMood(id: String) = push(MoodKey(id))
+
+        override fun openMoods() = push(MoodsKey)
+
+        override fun openChart() = push(ChartKey)
+
+        override fun openAccount() = push(AccountKey)
+
+        override fun openSettings() = push(SettingsKey)
+
+        override fun openLibrary(tab: LibraryTab) {
+          expanded = false
+          select(Tab.Library, tab)
+        }
+
         override fun addToPlaylist(track: ru.palustris.music.core.model.Track) = vm.askPlaylistFor(track)
       }
     }
+  // Ссылка на плейлист из другого приложения: открываем поверх текущего экрана.
+  val link by vm.openLink.collectAsStateWithLifecycle()
+  LaunchedEffect(link) {
+    link?.let { slug ->
+      push(SharedKey(slug))
+      vm.consumeLink()
+    }
+  }
   val back: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) }
 
   CompositionLocalProvider(LocalTrackActions provides vm, LocalTrackMarks provides marks, LocalNavigator provides navigator) {
@@ -202,15 +247,7 @@ private fun MainScaffold(vm: MainViewModel) {
         popTransitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
         entryProvider =
           entryProvider {
-            entry<HomeKey> {
-              HomeScreen(
-                player = playerState,
-                contentPadding = contentPadding,
-                onOpenSettings = { backStack.add(SettingsKey) },
-                onOpenDownloads = { select(Tab.Library, LibraryTab.Downloads) },
-                onToggle = vm::togglePlay,
-              )
-            }
+            entry<HomeKey> { HomeScreen(player = playerState, contentPadding = contentPadding, onToggle = vm::togglePlay) }
             entry<SearchKey> { SearchScreen(contentPadding) }
             entry<LibraryKey> { key ->
               LibraryScreen(contentPadding, initialTab = key.tab, onOpenSettings = { backStack.add(SettingsKey) })
@@ -219,16 +256,34 @@ private fun MainScaffold(vm: MainViewModel) {
               SettingsScreen(
                 contentPadding,
                 onBack = back,
-                onLogout = vm::logout,
+                onOpenAccount = { push(AccountKey) },
                 onOpenEqualizer = { push(EqualizerKey) },
               )
             }
+            entry<AccountKey> {
+              AccountScreen(
+                contentPadding,
+                onBack = back,
+                onLogout = vm::logout,
+                onDeleted = vm::onAccountDeleted,
+                onOpenLibrary = { select(Tab.Library, it) },
+                onOpenSettings = { push(SettingsKey) },
+                onMessage = vm::message,
+              )
+            }
+            entry<MoodKey> { k -> MoodScreen(k.id, contentPadding, onBack = back, onMessage = vm::message) }
+            entry<MoodsKey> { MoodsScreen(contentPadding, onBack = back, onOpen = { push(MoodKey(it.id)) }) }
+            entry<ChartKey> { ChartScreen(contentPadding, onBack = back) }
+            entry<SharedKey> { k -> SharedPlaylistScreen(k.slug, contentPadding, onBack = back, onMessage = vm::message) }
             entry<ArtistKey> { k -> ArtistScreen(k.id, k.name, contentPadding, onBack = back) }
             entry<CollectionKey> { k -> CollectionScreen(k.id, contentPadding, onBack = back, onMessage = vm::message) }
             entry<PlaylistKey> { k -> PlaylistScreen(k.id, contentPadding, onBack = back, onMessage = vm::message) }
             entry<EqualizerKey> { EqualizerScreen(contentPadding, onBack = back) }
           },
       )
+
+      // Значки строки состояния читаются и поверх обложек, когда список прокручен.
+      StatusBarScrim()
 
       Column(
         Modifier.align(Alignment.BottomCenter).onSizeChanged { bottomHeight = with(density) { it.height.toDp() } }
@@ -290,4 +345,14 @@ private fun MainScaffold(vm: MainViewModel) {
       }
     }
   }
+}
+
+@Composable
+private fun StatusBarScrim() {
+  val bg = MaterialTheme.colorScheme.background
+  Box(
+    Modifier.fillMaxWidth()
+      .windowInsetsTopHeight(WindowInsets.statusBars)
+      .background(Brush.verticalGradient(listOf(bg.copy(alpha = 0.72f), bg.copy(alpha = 0.35f))))
+  )
 }
