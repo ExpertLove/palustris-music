@@ -55,7 +55,7 @@ MUSIC_DATA=./data MUSIC_WEB=../web/dist MUSIC_ADMINS=you@example.com cargo run
 2. Небольшие коммиты, сообщения **по-русски**, в повелительном или назывном виде: «Админка: журнал загрузок».
    Коммитьте только свои файлы: `git commit -- путь1 путь2`.
 3. Перед выкладкой:
-   - `cargo test` и `npm run build` проходят (то же проверяет CI на GitHub);
+   - `cargo test`, `npm run build` и для Android `./gradlew assembleDebug testDebugUnitTest` проходят (то же проверяет CI на GitHub, отладочный APK лежит в артефактах);
    - сайт сначала на `/next/`, проверка руками или скриншотами на 1440 и 390 px;
    - для бэкенда — проверка на живом сервере сразу после `deploy-server.sh` (`curl`, админка);
    - тестовые аккаунты и данные удалены.

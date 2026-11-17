@@ -43,7 +43,8 @@ cd web && npm run build                                 # tsc -b + vite build (w
 ./ops/deploy-web.sh next|prod   ./ops/deploy-server.sh  # deploy (needs the SSH key)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `cargo test` and `npm run build` on every push.
+CI (`.github/workflows/ci.yml`) runs `cargo test`, `npm run build` and the Android `assembleDebug testDebugUnitTest`
+(debug APK uploaded as an artifact) on every push.
 
 ## Rules that bite
 

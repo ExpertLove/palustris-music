@@ -34,7 +34,12 @@ tapping the fields. `android layout --flat -o file.json` gives the center of eac
 ./gradlew assembleDebug              # app/build/outputs/apk/debug/app-debug.apk (id ru.palustris.music.debug)
 ./gradlew assembleRelease            # signed, R8-minified, app/build/outputs/apk/release/app-release.apk
 ./gradlew testDebugUnitTest          # JVM unit tests
-./gradlew connectedDebugAndroidTest  # instrumented tests (device needed)
+./gradlew connectedDebugAndroidTest  # instrumented tests (device needed); NOTE: uninstalls the app afterwards
+# Keep the logged-in app: build, install both APKs and run the class by hand
+./gradlew assembleDebug assembleDebugAndroidTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w -e class ru.palustris.music.LibraryBrowseTest ru.palustris.music.debug.test/androidx.test.runner.AndroidJUnitRunner
 android emulator start Pixel_9_API_37
 android run app/build/outputs/apk/debug/app-debug.apk
 android layout --pretty              # UI tree as JSON; primary way to inspect the running app
@@ -68,32 +73,46 @@ Never regenerate the key: installed apps can only be updated with the same key.
 
 Kotlin 2.4 · Jetpack Compose (BOM 2026.09) + **Material3 1.5.0-rc01** (Expressive APIs) + material-icons-extended · Navigation 3 ·
 Media3 1.11 (ExoPlayer, MediaSessionService, OkHttp datasource, DownloadManager) · Hilt (KSP) · DataStore ·
-Retrofit 3 + kotlinx.serialization · OkHttp 5 · Coil 3 · Palette · Timber · SplashScreen · ProfileInstaller.
-No Room yet: the download list lives in Media3's own DownloadIndex. Add Room when playlists or history go offline.
+Retrofit 3 + kotlinx.serialization · OkHttp 5 · Coil 3 · Palette · Timber · SplashScreen · ProfileInstaller ·
+Glance 1.2 (widget) + WorkManager 2.12 (pinned explicitly, see R8 below) · Calvin-LL Reorderable 3.1 (Apache-2.0, drag in lists).
+No Room: downloads live in Media3's DownloadIndex; likes, playlists, profile, history and home are small JSON files
+(`data/OfflineFiles`, AtomicFile) because they are read whole and never queried. Revisit if that stops being true.
 minSdk 26, target/compile 37.
+
+**R8 (AGP 9 strict full mode):** `-keep class X` no longer keeps the no-arg constructor. Libraries with old consumer
+rules break only in release. Glance 1.2.0 drags in WorkManager 2.7.1 (Room 2.2.5) whose rule does not keep
+`WorkDatabase_Impl.<init>()`: release crashed in `InitializationProvider` until WorkManager 2.12 was added explicitly.
+**Always run the release build on the emulator before shipping.** Glance `ActionCallback`s are kept in `proguard-rules.pro`.
 
 ## Architecture (as built)
 
 ```
 ru.palustris.music
 ├─ core/   AppModule (OkHttp + auth interceptor, Retrofit, Json, @AppScope), net/ (MusicApi, apiCall → Russian error text),
-│          model/ (Track…), prefs/ (SessionStore: token; SettingsStore: cache limit, download quality, Wi-Fi only)
-├─ data/   LibraryRepository (likes, optimistic), PlaylistsRepository (server playlists + `version` to reload open ones)
-├─ media/  PlaybackService (MediaSessionService + ExoPlayer: background, notification, headset keys,
-│          history/skip reporting, server prefetch, endless «Моя волна», skip on error,
-│          queue persistence + onPlaybackResumption, EQ in the audio sink),
+│          model/ (Track, Me, Playlist…), prefs/ (SessionStore: token; SettingsStore: cache limit, quality, Wi-Fi only,
+│          normalize, crossfade, chart region)
+├─ data/   OfflineFiles (JSON in filesDir/offline, AtomicFile), Outbox (queue of edits for the server),
+│          AccountRepository (profile, password, devices, delete), LibraryRepository (likes, offline),
+│          PlaylistsRepository (list + content offline, edits via Outbox, share links, shared playlists)
+├─ media/  PlaybackService (MediaLibraryService + ExoPlayer: background, notification, headset keys,
+│          history via Outbox / skips, server prefetch, endless «Моя волна», skip on error,
+│          queue persistence + onPlaybackResumption, EQ in the audio sink, Android Auto catalog),
+│          LibraryTree (catalog for Android Auto), ArtworkProvider (content:// artwork for the car),
 │          PlayerConnection (MediaController → StateFlow<PlayerState> for UI), QueueStore (filesDir/queue.json),
-│          SleepTimer (fade over 10 s via player.volume, or pauseAtEndOfMediaItems),
-│          AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
-│   audio/ LoudnessProcessor → (eq) → CrossfadeProcessor: the sink's processor chain; StreamInfo (which track a
-│          `flush(StreamMetadata)` belongs to), LoudnessStore (+ LoudnessMath, cache in filesDir/loudness.json)
+│          SleepTimer, AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
+│   audio/ LoudnessProcessor → (eq) → CrossfadeProcessor, StreamInfo, LoudnessStore (+ LoudnessMath)
 │   eq/    EqMath (bands/formulas = website), EqualizerProcessor (BaseAudioProcessor, PCM16), EqualizerStore (DataStore)
-└─ ui/     MusicRoot (theme from artwork, Nav3, mini/full player, snackbars, Navigator, add-to-playlist sheet),
-           MainViewModel (TrackActions, PlayerControls), auth/ home/ search/ library/ settings/ player/ (FullPlayer,
-           Lyrics, MiniPlayer) catalog/ (artist, album pages) playlists/ equalizer/ common/ theme/
+├─ widget/ MusicWidget (Glance, 3 sizes), MusicWidgetReceiver, NowPlayingStore (state + one decoded artwork),
+│          Play/Next/Previous ActionCallbacks (MediaController)
+└─ ui/     MusicRoot (theme from artwork, Nav3, mini/full player, snackbars, Navigator, add-to-playlist sheet, status bar scrim),
+           MainViewModel (TrackActions, PlayerControls, sign out / account deleted, incoming links), home/ (new home),
+           account/ (profile screen, genres, Avatar), moods/ (20 moods, cards, mood and all-moods screens), chart/ (regions),
+           auth/ search/ (moods grid when idle) library/ settings/ player/ catalog/ playlists/ (drag, share, shared)
+           equalizer/ common/ (Components, Collections, Groups) theme/
 ```
 
-Navigation keys: Home, Search, Library(tab), Settings, Artist(id?, name), Collection(id), Playlist(id), Equalizer.
+Navigation keys: Home, Search, Library(tab), Settings, Artist(id?, name), Collection(id), Playlist(id), Equalizer,
+Account, Mood(id), Moods, Chart, Shared(slug). The nav bar is hidden on Settings, Equalizer and Account.
 Detail screens use `hiltViewModel(key = ...)` in the activity store (no per-entry ViewModel decorator, so tab state
 survives switching). `LocalNavigator` opens pages from anywhere, including the full player (it collapses first).
 
@@ -143,10 +162,23 @@ Also verified (0.3.0), with PCM dumps of the sink output:
 - sleep timer «когда закончится трек» with crossfade on: no blend, the track plays to its end and pauses;
 - release build (R8): crossfade and playback.
 
-Unit tests: PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
+Also verified (0.4.0), debug and release (R8):
+- new home, account (profile save, wrong current password shown in the dialog), moods (35 tracks from 3 searches),
+  chart region switch, search idle moods, seek slider (SliderState);
+- airplane mode: rename + like queued, app restarted offline (home, likes, playlists from the phone), network back →
+  outbox flushed by itself, server has both edits;
+- drag in a playlist → order on the server; share link → share sheet, link opens the shared screen, unshare;
+- App Links verified for the release package; widget: pin from settings, play/pause, next, small size, after
+  force-stop + app start; release: like through the outbox, widget actions, artwork provider;
+- `LibraryBrowseTest` (car catalog): root, 20 moods, playlist paging, tap 2nd track → whole playlist from index 1,
+  search, «Моя волна».
+
+Unit tests (38): PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
 wrap on overload), LRC parser, CrossfadeProcessor (8: blend shape, plan revoked → tail played out, seek and skip
 cancel, double flush at the boundary, sample-rate change, last track not cut), Loudness (4: gain math, per-track
-gain and ramp).
+gain and ramp), OfflineSync (9: outbox compaction, in-flight op, JSON round trip, pending likes and playlist edits over
+the server answer, reorder, row covers), UiLogic (6: initials, mood interleave, moods by hour, queries, region,
+car item ids). Instrumented: LibraryBrowseTest.
 
 ### Audio chain: loudness and crossfade (how it works)
 
@@ -177,24 +209,73 @@ each new stream (next item, seek) processors get the timeline and period uid, so
 - `EqualizerProcessor` applies the format in `onFlush`, not `onConfigure`: configure for the next track arrives while
   the current one is still playing.
 
+### Offline: likes, playlists, profile, home (0.4.0)
+
+- **Copies on the phone** (`filesDir/offline/*.json` via `OfflineFiles`): `me.json`, `likes.json`, `playlists.json`
+  (list + every playlist's tracks, up to 100 playlists), `history.json`, `home.json`, `mood-{id}.json`. Repositories read
+  the copy first, then the server. Sign out and account deletion wipe the folder.
+- **Outbox** (`outbox.json`): like/unlike, playlist add/remove/order/rename and listens (history) are applied locally at
+  once and queued. Sent in order when the default network becomes available, on every add, and on retry with backoff
+  15 s → 5 min. 2xx/4xx drop the op (4xx = «no longer valid», e.g. playlist deleted on the site); IO, 5xx, 429, 401 retry.
+  Compaction: like+unlike cancel, only the last order and name per playlist are kept, an add is dropped by a later
+  remove (the remove is still sent). The op in flight is never compacted.
+- **Merging:** a refresh first flushes the outbox, then lays the still-pending ops over the server answer
+  (`applyPending`), so nothing blinks. Create, delete and share need the network (they need the server's answer).
+- Home reads its copy before the network: offline requests fail instantly and would otherwise win the race.
+- Settings → account card shows how many edits wait for the network.
+
+### Playlists: drag, share, links
+
+- Drag by the handle (`sh.calvin.reorderable`); the order lives in the screen while dragging and goes to
+  `PlaylistsRepository.reorder` on release. «Выше/Ниже» stay in the track menu for TalkBack.
+- Share: `POST /api/playlists/{id}/share` → `https://music.palustris.ru/s/{slug}` in the system share sheet; «Закрыть
+  доступ по ссылке» unshares. **App Links:** the manifest filter `https://music.palustris.ru/s/*` (autoVerify) and
+  `web/public/.well-known/assetlinks.json` (release key SHA-256). `pm get-app-links ru.palustris.music` → verified.
+  The debug build (other id and key) is not verified: open links with `am start -a VIEW -d <url> ru.palustris.music.debug`.
+- `SharedKey(slug)` screen: listen, download, «Сохранить к себе» (creates your copy).
+
+### Widget (Glance)
+
+- `MusicWidget`: SizeMode.Responsive 110×110 (artwork + play/next), 250×110 and 250×180 (artwork, title, prev/play/next).
+  GlanceTheme = wallpaper colors. Tap on artwork/title opens the app; empty state «Включить музыку» opens the app.
+- `NowPlayingStore` is fed by PlaybackService (`onEvents`) and decodes the artwork once per track (Coil, 300 px,
+  RGB_565, `allowHardware(false)`), shared by all sizes; widget updates are debounced 300 ms. After a reboot the store
+  starts from `queue.json`.
+- Buttons are `ActionCallback`s that build a `MediaController` from **applicationContext** (the receiver context cannot
+  bind: `ReceiverCallNotAllowedException`). Play waits up to 3 s for the restored queue and keeps the controller 1 s so
+  the service reaches the foreground. Settings has «Виджет на главный экран» (`requestPinAppWidget`).
+- Force-stop makes Android grey out the widget until the app is opened again (system behaviour).
+
+### Android Auto
+
+- `PlaybackService` is a `MediaLibraryService`; `automotive_app_desc.xml` + `com.google.android.gms.car.application`.
+- `LibraryTree`: root → «Моя волна» (playable), Мне нравится, Плейлисты → pl:{id}, Скачанные, Недавно играло,
+  Настроение → mood:{id}. Track items are `item|{list}|{trackId}`; `onSetMediaItems`/`onAddMediaItems` expand a tapped
+  item to the whole list from that track (the queue gets plain track ids). Voice «play X» → search; empty query → wave.
+  Paging is honoured. Grid style for playlists and moods.
+- Library commands only for the app itself, trusted controllers (`isTrusted`) and Android Auto / Assistant / Wear /
+  SystemUI packages; other apps get playback control only.
+- `ArtworkProvider` (exported, `${applicationId}.artwork`) serves artwork as `content://` (the car does not load http):
+  only https from i.ytimg.com / *.googleusercontent.com / *.ggpht.com, ≤ 2 MB, 300 files in `cacheDir/auto_art`.
+  Any failure becomes `FileNotFoundException` (the only error Binder passes back for `openFile`).
+- Verified with `LibraryBrowseTest` (MediaBrowser like the car). Not tried on a real head unit or the DHU.
+
 ### Known gaps / next steps
 
-- Playlist reorder is up/down from the track menu, not drag and drop.
-- Sharing playlists (`/api/playlists/{id}/share`).
+- Android Auto on a real car or the Desktop Head Unit (only the MediaBrowser test so far).
+- Widget picker preview (Glance generated previews, API 35+); today the picker shows the app icon.
+- Offline creation and deletion of playlists (need temporary ids).
 - Crossfade: optional «no blend inside an album» rule; crossfade for repeat-one.
-- Offline copies of likes and playlists (needs Room).
-- Android Auto (MediaLibraryService).
-- Glance widget.
 - Baseline profile.
-- Move Slider to the SliderState overload (deprecation warning).
+- Delete the test account `android-test@palustris.ru` when it is no longer needed for emulator tests.
 
 ## Product scope (parity with the website + native extras)
 
-Login/registration/password reset · «Моя волна» · search (tracks/artists/albums) · artist/album pages ·
-likes · playlists (create/rename/reorder/share) · history · synced lyrics · queue (play next, reorder) ·
-shuffle/repeat · **equalizer with presets** (must have) · sleep timer · crossfade (0–12 s) · loudness normalization ·
-background playback, notification, lock screen, headset buttons · offline cache · home-screen widget (Glance) ·
-Android Auto (later).
+Login/registration/password reset · account settings · «Моя волна» · home with recommendations · moods · charts by
+country · search (tracks/artists/albums) · artist/album pages · likes · playlists (create/rename/drag/share/open links) ·
+history · synced lyrics · queue (play next, reorder) · shuffle/repeat · **equalizer with presets** (must have) ·
+sleep timer · crossfade (0–12 s) · loudness normalization · background playback, notification, lock screen, headset
+buttons · offline cache and offline library · home-screen widget (Glance) · Android Auto.
 
 ## Design direction
 

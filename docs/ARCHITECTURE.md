@@ -119,8 +119,11 @@ ggpht и i.ytimg, скрипты и шрифты — только свои: но
 
 ## Android (`android/`)
 
-Нативный клиент к тому же API: Compose (Material 3 Expressive), Media3 (фоновое воспроизведение, экран блокировки),
-Hilt, Room, Retrofit, Coil 3. Скачанные треки — компактные Opus-копии с сервера (`?q=o64|o96`).
+Нативный клиент к тому же API: Compose (Material 3 Expressive), Media3 (фоновое воспроизведение, экран блокировки,
+Android Auto через MediaLibraryService), Hilt, Retrofit, Coil 3, Glance (виджет). Скачанные треки — компактные
+Opus-копии с сервера (`?q=o64|o96`). Лайки, плейлисты и профиль хранятся на телефоне JSON-файлами, правки копятся
+в очереди и уходят на сервер, когда есть связь. Ссылки `/s/{slug}` открываются в приложении: сайт отдаёт
+`/.well-known/assetlinks.json` (лежит в `web/public/.well-known/`, выкладывается вместе с сайтом).
 Всё остальное — в [`android/AGENTS.md`](../android/AGENTS.md), API — в [`android/docs/API.md`](../android/docs/API.md).
 
 ## API админки
