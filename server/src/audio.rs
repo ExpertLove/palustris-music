@@ -17,6 +17,25 @@ use crate::accounts;
 
 pub const EXTS: [&str; 4] = ["m4a", "webm", "opus", "mp3"];
 
+/// Пока YouTube блокирует сервер, к нему идёт одна пробная загрузка раз в столько секунд.
+pub const PROBE_EVERY: i64 = 180;
+/// Ошибка для запросов, которые во время блока не дошли до YouTube.
+pub const BLOCKED: &str = "YouTube сейчас блокирует сервер («подтвердите, что вы не бот»), следующая проверка позже";
+
+/// Блок YouTube: с какого момента и когда пробовали последний раз (unix-секунды).
+#[derive(Default, Clone, Copy, Debug)]
+pub struct Block {
+    pub since: Option<i64>,
+    pub last_probe: Option<i64>,
+    probing: bool,
+}
+
+enum Gate {
+    Open,
+    Probe,
+    Closed,
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct JobState {
     pub size: Option<u64>,
@@ -77,6 +96,7 @@ pub struct Audio {
     pub on_ready: std::sync::OnceLock<Box<dyn Fn(&str, &Path) + Send + Sync>>,
     play_slots: Semaphore,
     prefetch_slots: Semaphore,
+    block: Mutex<Block>,
 }
 
 pub enum Ready {
@@ -113,7 +133,67 @@ impl Audio {
             on_ready: std::sync::OnceLock::new(),
             play_slots: Semaphore::new(3),
             prefetch_slots: Semaphore::new(1),
+            block: Mutex::new(Block::default()),
         })
+    }
+
+    // ───────────── блок YouTube ─────────────
+    //
+    // Получили «подтвердите, что вы не бот» — сервер считается заблокированным. Дальше новые треки
+    // не дёргают YouTube (лишние запросы только продлевают блок и сжигают аккаунты), а сразу идут
+    // в запасные источники. Раз в PROBE_EVERY один запрос пробует YouTube по-настоящему:
+    // удалось — блок снят. Предзагрузка во время блока не идёт вовсе.
+
+    pub fn block_state(&self) -> Block {
+        self.block.lock().map(|b| *b).unwrap_or_default()
+    }
+
+    pub fn yt_blocked(&self) -> bool {
+        self.block_state().since.is_some()
+    }
+
+    fn gate(&self, prefetch: bool) -> Gate {
+        let Ok(mut b) = self.block.lock() else { return Gate::Open };
+        if b.since.is_none() {
+            return Gate::Open;
+        }
+        let now = crate::recs::now();
+        if prefetch || b.probing || b.last_probe.is_some_and(|t| now - t < PROBE_EVERY) {
+            return Gate::Closed;
+        }
+        b.probing = true;
+        b.last_probe = Some(now);
+        Gate::Probe
+    }
+
+    /// Итог загрузки для состояния блока.
+    fn settle(&self, res: &anyhow::Result<PathBuf>, probe: bool) {
+        let Ok(mut b) = self.block.lock() else { return };
+        if probe {
+            b.probing = false;
+        }
+        let kind = match res {
+            Ok(_) => None,
+            Err(e) => Some(accounts::classify(&e.to_string())),
+        };
+        match kind {
+            // YouTube ответил по существу (трек или «видео недоступно») — блока нет.
+            None | Some(accounts::ErrKind::Video) => {
+                if let Some(since) = b.since.take() {
+                    eprintln!("YouTube снова отдаёт звук, блок длился {} мин", (crate::recs::now() - since) / 60);
+                }
+                b.last_probe = None;
+            }
+            Some(accounts::ErrKind::Bot) => {
+                if b.since.is_none() {
+                    let now = crate::recs::now();
+                    eprintln!("YouTube блокирует сервер: новые треки — из запасных источников, проверка раз в {PROBE_EVERY} с");
+                    b.since = Some(now);
+                    b.last_probe = Some(now);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn cached(&self, id: &str) -> Option<PathBuf> {
@@ -157,7 +237,7 @@ impl Audio {
     }
 
     pub fn prefetch(self: &Arc<Self>, id: &str) {
-        if !valid_id(id) || self.cached(id).is_some() {
+        if !valid_id(id) || self.yt_blocked() || self.cached(id).is_some() {
             return;
         }
         if self.jobs.lock().map(|m| m.contains_key(id)).unwrap_or(true) {
@@ -167,6 +247,23 @@ impl Audio {
     }
 
     async fn run(&self, id: &str, job: &Job, prefetch: bool) -> anyhow::Result<PathBuf> {
+        if let Some(p) = self.cached(id) {
+            return Ok(p);
+        }
+        let probe = match self.gate(prefetch) {
+            Gate::Open => false,
+            Gate::Probe => true,
+            Gate::Closed => anyhow::bail!("{BLOCKED}"),
+        };
+        if probe {
+            eprintln!("YouTube под блоком: пробная загрузка {id}");
+        }
+        let res = self.attempts(id, job, prefetch).await;
+        self.settle(&res, probe);
+        res
+    }
+
+    async fn attempts(&self, id: &str, job: &Job, prefetch: bool) -> anyhow::Result<PathBuf> {
         let _permit = if prefetch { self.prefetch_slots.acquire().await? } else { self.play_slots.acquire().await? };
         if let Some(p) = self.cached(id) {
             return Ok(p);

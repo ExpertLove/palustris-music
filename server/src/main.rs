@@ -684,9 +684,7 @@ async fn search(State(st): St, h: HeaderMap, Query(sq): Query<SearchQ>) -> ApiRe
     if sq.kind.as_deref() == Some("songs") && q.len() <= 200 {
         return Ok(Json(st.cache.songs(&st.http, q).await));
     }
-    let mut v = st.cache.search(&st.http, q).await;
-    sources::augment(q, &mut v, false).await;
-    Ok(Json(v))
+    Ok(Json(st.cache.search(&st.http, q).await))
 }
 
 /// Поиск по всем типам: треки, исполнители, альбомы, плейлисты.
@@ -697,13 +695,11 @@ async fn search_all(State(st): St, h: HeaderMap, Query(sq): Query<SearchQ>) -> A
     if q.is_empty() || q.len() > 200 {
         return Ok(Json(yt::SearchAll::default()));
     }
-    let mut out = st
-        .cache
+    st.cache
         .search_all(&st.http, q)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
-    sources::augment(q, &mut out.tracks, true).await;
-    Ok(Json(out))
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -726,9 +722,25 @@ async fn lyrics_handler(State(st): St, h: HeaderMap, Query(q): Query<LyricsQ>) -
 
 #[derive(Deserialize)]
 struct StreamQ {
+    /// Исполнитель, название и длительность (с) — чтобы найти замену, если видео не отдаётся.
     a: Option<String>,
     t: Option<String>,
+    d: Option<String>,
+    /// Компактная копия для скачивания (`o64`, `o96`).
     q: Option<String>,
+    /// `1` — скачивание в приложение: запасные источники не используются.
+    dl: Option<String>,
+}
+
+impl StreamQ {
+    /// Замена из другого каталога допустима только для прослушивания: в загрузках должен лежать оригинал.
+    fn want(&self) -> Option<sources::Want> {
+        if self.q.is_some() || self.dl.as_deref() == Some("1") {
+            return None;
+        }
+        let d = self.d.as_deref().and_then(|d| d.trim().parse::<f64>().ok()).filter(|d| d.is_finite()).map(|d| d.round() as i64);
+        sources::Want::new(self.a.as_deref().unwrap_or_default(), self.t.as_deref().unwrap_or_default(), d)
+    }
 }
 
 /// «Blinding Lights (Official Video)» → «blinding lights».
@@ -763,12 +775,9 @@ async fn alternatives(st: &Arc<AppState>, id: &str, artist: &str, title: &str) -
         if t.id == id || out.contains(&t.id) {
             continue;
         }
-        let got = norm_name(&t.title);
-        let same_title = got == want || got.contains(&want) || want.contains(&got);
-        let same_artist = !artist.is_empty()
-            && (t.artist.to_lowercase().contains(&artist.to_lowercase())
-                || artist.to_lowercase().contains(&t.artist.to_lowercase()));
-        if same_title || same_artist {
+        // Та же песня того же исполнителя. Раньше хватало любого из двух, и вместо трека
+        // могла заиграть другая песня этого исполнителя или чужой кавер.
+        if sources::same_song(artist, title, &t.artist, &t.title) {
             out.push(t.id);
         }
         if out.len() >= 2 {
@@ -793,23 +802,17 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
     if let Err(e) = uid(&st, req.headers()) {
         return e.into_response();
     }
+    // Старые id из поиска 17.11 (см. sources.rs): играют как есть, без замен.
     if let Some(rest) = id.strip_prefix("x-sc:") {
-        return match sources::soundcloud_file(&st.audio.dir, rest).await {
+        return match sources::soundcloud_file(&st.audio.dir, rest, None).await {
             Ok(p) => serve_file(p, req).await,
-            Err(e) => match fallback_audio(&st, &q, &id, req).await {
-                Some(r) => r,
-                None => (StatusCode::BAD_GATEWAY, e).into_response(),
-            },
+            Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
         };
     }
     if sources::is_external(&id) {
-        let r = sources::proxy(&id, req.headers()).await;
-        if r.status().is_success() {
-            return r;
-        }
-        return match fallback_audio(&st, &q, &id, req).await {
-            Some(f) => f,
-            None => r,
+        return match sources::legacy_url(&id).await {
+            Ok(u) => sources::proxy_url(&u, req.headers()).await,
+            Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
         };
     }
     if !audio::valid_id(&id) {
@@ -825,23 +828,22 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
             return serve_file(p, req).await;
         }
     }
-    let ready = match resolve_audio(&st, &id, &q).await {
+    let want = q.want();
+    let ready = match resolve_audio(&st, &id, &q, want.as_ref()).await {
         Ok(r) => r,
-        Err(resp) => {
-            return match fallback_audio(&st, &q, &id, req).await {
-                Some(r) => r,
-                None => resp,
-            }
-        }
+        Err(resp) => return substitute_or(&st, &id, want, req, resp).await,
     };
     let Some(k) = kbps else {
         return match ready {
-            audio::Ready::Progressive(job) => audio::serve_progressive(job, req.headers()).await,
-            audio::Ready::File(p) => serve_file(p, req).await,
-            audio::Ready::Failed(e) => match fallback_audio(&st, &q, &id, req).await {
-                Some(r) => r,
-                None => (StatusCode::BAD_GATEWAY, e).into_response(),
-            },
+            audio::Ready::Progressive(job) => {
+                sources::forget_sub(&id);
+                audio::serve_progressive(job, req.headers()).await
+            }
+            audio::Ready::File(p) => {
+                sources::forget_sub(&id);
+                serve_file(p, req).await
+            }
+            audio::Ready::Failed(e) => substitute_or(&st, &id, want, req, (StatusCode::BAD_GATEWAY, e).into_response()).await,
         };
     };
     let src = match ready {
@@ -861,31 +863,47 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
     }
 }
 
-/// Основной источник не отдал звук — пробуем тот же трек в другом каталоге.
-async fn fallback_audio(st: &Arc<AppState>, q: &StreamQ, failed: &str, req: Request) -> Option<Response> {
-    let t = sources::fallback(
-        &st.audio.dir,
-        q.a.as_deref().unwrap_or_default(),
-        q.t.as_deref().unwrap_or_default(),
-        failed,
-    )
-    .await?;
-    if let Some(rest) = t.id.strip_prefix("x-sc:") {
-        return match sources::soundcloud_file(&st.audio.dir, rest).await {
+/// YouTube не отдал звук — та же запись из другого каталога (строгие правила в sources.rs), иначе исходная ошибка.
+async fn substitute_or(st: &Arc<AppState>, id: &str, want: Option<sources::Want>, req: Request, err: Response) -> Response {
+    let Some(want) = want else { return err };
+    let Some(sub) = sources::fallback(st.audio.dir.clone(), want.clone(), st.accounts.clone(), id.to_string()).await else {
+        return err;
+    };
+    let resp = match &sub.play {
+        sources::Play::SoundCloud(hexid) => match sources::soundcloud_file(&st.audio.dir, hexid, Some(sub.duration)).await {
             Ok(p) => Some(serve_file(p, req).await),
-            Err(_) => None,
-        };
-    }
-    let r = sources::proxy(&t.id, req.headers()).await;
-    if r.status().is_success() {
-        Some(r)
-    } else {
-        None
+            Err(e) => {
+                eprintln!("stream {id}: замена с SoundCloud не отдалась: {e}");
+                None
+            }
+        },
+        sources::Play::Url(u) => Some(sources::proxy_url(u, req.headers()).await).filter(|r| r.status().is_success()),
+    };
+    match resp {
+        Some(mut r) => {
+            sources::mark(&mut r, &sub);
+            sources::remember_sub(id, &sub);
+            r
+        }
+        None => {
+            // Источник перестал отдавать: в следующий раз ищем заново.
+            sources::forget_lookup(&want);
+            err
+        }
     }
 }
 
-/// Файл трека или идущая загрузка; при неудаче ищем замену по исполнителю и названию.
-async fn resolve_audio(st: &Arc<AppState>, id: &str, q: &StreamQ) -> Result<audio::Ready, Response> {
+/// Что играет вместо трека: сайт спрашивает после старта (у `<audio>` нет доступа к заголовкам).
+async fn substitute_info(State(st): St, h: HeaderMap, Path(id): Path<String>) -> ApiResult<Option<sources::Sub>> {
+    uid(&st, &h)?;
+    Ok(Json(sources::sub_for(&id)))
+}
+
+/// Файл трека или идущая загрузка; при неудаче пробуем другие видео той же песни на YouTube.
+///
+/// Замена из других каталогов ищется параллельно, как только есть повод думать, что YouTube не отдаст:
+/// сервер сейчас под блоком или первая попытка не удалась. Тогда `substitute_or` забирает уже готовый результат.
+async fn resolve_audio(st: &Arc<AppState>, id: &str, q: &StreamQ, want: Option<&sources::Want>) -> Result<audio::Ready, Response> {
     let id = id.to_string();
     if let Some(p) = st.audio.cached(&id) {
         return Ok(audio::Ready::File(p));
@@ -901,6 +919,17 @@ async fn resolve_audio(st: &Arc<AppState>, id: &str, q: &StreamQ) -> Result<audi
         if m.get(&id).map(|at| at.elapsed() < std::time::Duration::from_secs(600)).unwrap_or(false) {
             return Err((StatusCode::BAD_GATEWAY, "трек временно недоступен").into_response());
         }
+    }
+
+    let mut warmed = false;
+    let mut warm = || {
+        if let (false, Some(w)) = (warmed, want) {
+            warmed = true;
+            tokio::spawn(sources::fallback(st.audio.dir.clone(), w.clone(), st.accounts.clone(), id.clone()));
+        }
+    };
+    if st.audio.yt_blocked() {
+        warm();
     }
 
     let mut candidates = vec![known_alt.unwrap_or_else(|| id.clone())];
@@ -929,6 +958,11 @@ async fn resolve_audio(st: &Arc<AppState>, id: &str, q: &StreamQ) -> Result<audi
                 return Ok(audio::Ready::Progressive(job));
             }
             audio::Ready::Failed(e) => last = e,
+        }
+        warm();
+        // Сервер под блоком: другие видео тоже не скачаются, только продлим блок.
+        if st.audio.yt_blocked() {
+            break;
         }
         if !searched {
             searched = true;
@@ -1701,6 +1735,23 @@ fn spawn_maintenance(st: Arc<AppState>) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // `music fallback-check "Исполнитель" "Название" [секунды]` — что найдут запасные источники,
+    // без запуска сервера и без записи в базу (файлы SoundCloud — во временную папку).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("fallback-check") {
+        let (Some(a), Some(t)) = (args.get(2), args.get(3)) else {
+            anyhow::bail!("music fallback-check \"Исполнитель\" \"Название\" [секунды]");
+        };
+        let want = sources::Want::new(a, t, args.get(4).and_then(|d| d.parse().ok())).ok_or_else(|| anyhow::anyhow!("пустой исполнитель или название"))?;
+        let dir = std::env::temp_dir().join("music-fallback-check");
+        match sources::check(&dir, &want).await {
+            Some(s) => println!("нашлось: {} «{}» / {} ({} c) {}", s.source_name, s.title, s.artist, s.duration, s.page),
+            None => println!("замены нет"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        return Ok(());
+    }
+
     let data = std::env::var("MUSIC_DATA").unwrap_or_else(|_| "data".into());
     let cache_dir = std::path::PathBuf::from(std::env::var("MUSIC_CACHE").unwrap_or_else(|_| format!("{data}/cache")));
     let web = std::env::var("MUSIC_WEB").unwrap_or_else(|_| "web/dist".into());
@@ -1783,6 +1834,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/wrapped", get(wrapped_handler))
         .route("/api/top", get(top))
         .route("/api/stream/{id}", get(stream))
+        .route("/api/substitute/{id}", get(substitute_info))
         .route("/api/prefetch", post(prefetch))
         .route("/api/loudness", post(loudness_handler))
         .route("/api/likes", get(likes).post(like))

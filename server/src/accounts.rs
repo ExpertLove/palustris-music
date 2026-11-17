@@ -416,21 +416,38 @@ impl Accounts {
     pub fn counts(&self, secs: i64) -> (i64, i64, i64) {
         let Ok(db) = self.db.lock() else { return (0, 0, 0) };
         let since = now() - secs;
+        // Только YouTube: запасные источники (`fallback*`) считаются отдельно, см. [fallback_counts].
         db.query_row(
             "SELECT
-               (SELECT COUNT(DISTINCT video) FROM dl_events WHERE at>=?1 AND ok=1),
-               (SELECT COUNT(DISTINCT video) FROM dl_events e WHERE at>=?1 AND ok=0
-                  AND NOT EXISTS(SELECT 1 FROM dl_events s WHERE s.video=e.video AND s.ok=1 AND s.at>=e.at)),
-               (SELECT COUNT(*) FROM dl_events WHERE at>=?1 AND ok=0)",
+               (SELECT COUNT(DISTINCT video) FROM dl_events WHERE at>=?1 AND ok=1 AND client NOT LIKE 'fallback%'),
+               (SELECT COUNT(DISTINCT video) FROM dl_events e WHERE at>=?1 AND ok=0 AND client NOT LIKE 'fallback%'
+                  AND NOT EXISTS(SELECT 1 FROM dl_events s WHERE s.video=e.video AND s.ok=1 AND s.at>=e.at
+                                 AND s.client NOT LIKE 'fallback%')),
+               (SELECT COUNT(*) FROM dl_events WHERE at>=?1 AND ok=0 AND client NOT LIKE 'fallback%')",
             [since],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap_or((0, 0, 0))
     }
 
+    /// Замены из запасных источников за период: (нашлась, не нашлась).
+    pub fn fallback_counts(&self, secs: i64) -> (i64, i64) {
+        let Ok(db) = self.db.lock() else { return (0, 0) };
+        db.query_row(
+            "SELECT COALESCE(SUM(ok=1), 0), COALESCE(SUM(ok=0), 0) FROM dl_events WHERE at>=?1 AND client LIKE 'fallback%'",
+            [now() - secs],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0))
+    }
+
     pub fn last_error(&self) -> Option<(i64, String)> {
         let db = self.db.lock().ok()?;
-        db.query_row("SELECT at, err FROM dl_events WHERE ok=0 ORDER BY id DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        db.query_row(
+            "SELECT at, err FROM dl_events WHERE ok=0 AND client NOT LIKE 'fallback%' ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
             .optional()
             .ok()
             .flatten()

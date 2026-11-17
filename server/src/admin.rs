@@ -103,10 +103,20 @@ pub async fn overview(State(st): St, h: HeaderMap) -> ApiResult<serde_json::Valu
             Some(serde_json::json!({ "size": it.next()?.parse::<u64>().ok()?, "avail": it.next()?.parse::<u64>().ok()? }))
         });
 
+    let block = st.audio.block_state();
+    let (fb_h_ok, fb_h_miss) = acc.fallback_counts(3600);
+    let (fb_d_ok, fb_d_miss) = acc.fallback_counts(86400);
+
     Ok(Json(serde_json::json!({
         "now": now,
         "startedAt": st.started,
         "ipFlaggedUntil": acc.ip_flagged_until(),
+        "ytBlockedSince": block.since,
+        "ytNextProbe": block.since.map(|_| block.last_probe.unwrap_or(now) + audio::PROBE_EVERY),
+        "fallback": {
+            "hour": { "ok": fb_h_ok, "miss": fb_h_miss },
+            "day": { "ok": fb_d_ok, "miss": fb_d_miss },
+        },
         "accounts": { "total": list.len(), "available": available },
         "hour": { "ok": h_ok, "fail": h_fail, "attemptsFailed": h_att },
         "day": { "ok": d_ok, "fail": d_fail, "attemptsFailed": d_att },
