@@ -189,6 +189,7 @@ private fun MainScaffold(vm: MainViewModel) {
   val backStack = rememberNavBackStack(HomeKey)
   val sheet = rememberPlayerSheetState()
   val beatOn by vm.beatMotion.collectAsStateWithLifecycle()
+  val substitutes by vm.substitutes.collectAsStateWithLifecycle()
   val beat =
     rememberBeat(
       vm.levels,
@@ -397,6 +398,7 @@ private fun MainScaffold(vm: MainViewModel) {
           speedPercent = speedPercent,
           sheet = sheet,
           beat = beat.takeIf { beatOn },
+          substitute = playerState.track?.let { substitutes[it.id] },
         )
       }
       // Обложка, перелетающая между мини-плеером и полным.

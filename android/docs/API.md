@@ -2,7 +2,19 @@
 
 Base URL: `https://music.palustris.ru`. Auth: `Authorization: Bearer <token>` (token from `/api/login` / `/api/register` JSON body); cookie `music_s` is the web fallback. `/api/stream/{id}` also accepts Bearer, supports `Range` (206).
 
-**`/api/stream/{id}?q=o64|o96`** — compact Opus copy (Ogg) for downloads: ffmpeg transcodes the cached original once, then it is served as a file with `Content-Length` and Range. ~2× smaller than the AAC 128 original. First request for a track can take ~5–10 s. Query `a`/`t` (artist/title) let the server find a replacement if the video is gone.
+**`/api/stream/{id}?q=o64|o96`** — compact Opus copy (Ogg) for downloads: ffmpeg transcodes the cached original once, then it is served as a file with `Content-Length` and Range. ~2× smaller than the AAC 128 original. First request for a track can take ~5–10 s. Query `a`/`t`/`d` (artist/title/duration in seconds) let the server find a replacement if the video is gone.
+
+**Запасные источники (с 18.11, приложение 0.6.1).** Если YouTube не отдал трек, `/api/stream/{id}` может отдать
+такую же запись исполнителя из Audius, SoundCloud или archive.org (строгие правила — `docs/YOUTUBE.md`). Такой ответ:
+- `X-Substitute: audius|soundcloud|archive`, `X-Substitute-Title`, `X-Substitute-Artist` (UTF-8 в процентах, пробел = `%20`);
+- `Cache-Control: no-store` — приложение не пишет его в кэш (`SkipSubstituteSinkFactory`);
+- формат любой (mp3, m4a, ogg): ExoPlayer определяет по содержимому.
+
+Скачивание (`q=o64|o96` или `dl=1` для качества «Как на сервере») замену не получает: ошибка, и
+DownloadManager повторит позже. `GET /api/substitute/{id}` → `{source, sourceName, title, artist, duration, page}` или
+`null` — что играло вместо трека в последние 30 минут (сайт спрашивает его, потому что `<audio>` не видит
+заголовки). Старые id `x-au:`/`x-ov:`/`x-sc:`/`x-ia:` (попадали в поиск 17.11) играют как есть, в поиске
+их больше нет.
 
 **`POST /api/loudness`** `{"ids": [...]}` (до 100) → `{"<id>": {"lufs": -8.8, "peak": 1.2}, …}` — громкость по EBU R128:
 интегральная (LUFS) и пиковая с учётом межсэмпловых выбросов (dBTP). Сервер считает её ffmpeg-ом после загрузки трека
@@ -81,6 +93,7 @@ Base URL: `https://music.palustris.ru`. Auth: `Authorization: Bearer <token>` (t
 | `/api/wrapped` | GET `wrapped_handler` | `h: HeaderMap, Query(q): Query<StatsQ>` | `ApiResult<stats::Wrapped>` | «Итоги года». |
 | `/api/top` | GET `top` | `h: HeaderMap, Query(q): Query<TopQ>` | `ApiResult<Vec<Track>>` |  |
 | `/api/stream/{id}` | GET `stream` | `Path(id): Path<String>, Query(q): Query<StreamQ>, req: Request` | `Response` |  |
+| `/api/substitute/{id}` | GET `substitute_info` | `Path(id): Path<String>` | `Option<sources::Sub>` | что играет вместо трека |
 | `/api/prefetch` | POST `prefetch` | `h: HeaderMap, Json(b): Json<PrefetchBody>` | `ApiResult<()>` | Заранее качаем следующие треки очереди, чтобы они стартовали мгновенно. |
 | `/api/loudness` | POST `loudness_handler` | `h: HeaderMap, Json(b): Json<PrefetchBody>` | `ApiResult<std::collections::HashMap<String, loudness::Loudness>>` | Громкость треков (LUFS и true peak) для выравнивания. Неизвестные в ответ не попадают; если трек уже есть в кэше, он встаёт в очередь на анализ, и клиент спросит снова позже. |
 | `/api/likes` | GET `likes` | `h: HeaderMap` | `ApiResult<Vec<Track>>` |  |
@@ -191,7 +204,9 @@ struct LyricsQ {
 struct StreamQ {
     a: Option<String>,
     t: Option<String>,
+    d: Option<String>,   // длительность оригинала, секунды
     q: Option<String>,
+    dl: Option<String>,  // "1" — скачивание, без запасных источников
 }
 
 #[derive(Deserialize)]

@@ -34,8 +34,8 @@ android {
     applicationId = "ru.palustris.music"
     minSdk = 26
     targetSdk = 37
-    versionCode = 6
-    versionName = "0.6.0"
+    versionCode = 7
+    versionName = "0.6.1"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "API_BASE_URL", "\"https://music.palustris.ru/\"")
   }

@@ -80,6 +80,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.State
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -109,6 +110,7 @@ import coil3.compose.AsyncImage
 import ru.palustris.music.media.PlayerState
 import ru.palustris.music.media.Progress
 import ru.palustris.music.media.Streams
+import ru.palustris.music.media.Substitute
 import ru.palustris.music.media.TrackDownload
 import ru.palustris.music.ui.common.Artwork
 import ru.palustris.music.ui.common.LocalTrackActions
@@ -155,6 +157,38 @@ interface PlayerControls {
   fun setSpeed(percent: Int)
 }
 
+/** «Версия с SoundCloud» под исполнителем; по нажатию — что это значит. */
+@Composable
+private fun SubstituteNote(sub: Substitute, trackId: String) {
+  var info by remember(trackId) { mutableStateOf(false) }
+  Text(
+    "Версия с ${sub.sourceName}",
+    style = MaterialTheme.typography.labelMedium,
+    color = MaterialTheme.colorScheme.tertiary,
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+    modifier =
+      Modifier.padding(top = 2.dp)
+        .clip(RoundedCornerShape(6.dp))
+        .clickable(onClickLabel = "Что это значит") { info = true },
+  )
+  if (info) {
+    val what = listOf(sub.artist, sub.title).filter { it.isNotBlank() }.joinToString(" — ")
+    AlertDialog(
+      onDismissRequest = { info = false },
+      confirmButton = { TextButton(onClick = { info = false }) { Text("Понятно") } },
+      title = { Text("Запасной источник") },
+      text = {
+        Text(
+          "YouTube сейчас не отдаёт этот трек, поэтому играет такая же запись с ${sub.sourceName}" +
+            (if (what.isNotEmpty()) ": «$what»." else ".") +
+            " Скачать трек получится, когда YouTube снова его отдаст."
+        )
+      },
+    )
+  }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun FullPlayer(
@@ -170,6 +204,8 @@ fun FullPlayer(
   speedPercent: Int = 100,
   sheet: PlayerSheetState? = null,
   beat: Beat? = null,
+  /** YouTube не отдал трек: играет такая же запись из другого каталога. */
+  substitute: Substitute? = null,
 ) {
   val track = state.track ?: return
   val marks = LocalTrackMarks.current
@@ -335,6 +371,7 @@ fun FullPlayer(
               modifier = Modifier.padding(top = 2.dp),
             )
           }
+          if (substitute != null) SubstituteNote(substitute, track.id)
         }
         if (QueueSource.isRecommended(state.source)) {
           val disliked = track.id in marks.disliked

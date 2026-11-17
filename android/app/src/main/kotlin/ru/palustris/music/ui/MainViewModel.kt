@@ -42,6 +42,8 @@ import ru.palustris.music.media.eq.EqualizerStore
 import ru.palustris.music.media.AudioStorage
 import ru.palustris.music.media.PlayerConnection
 import ru.palustris.music.media.PlayerState
+import ru.palustris.music.media.Substitute
+import ru.palustris.music.media.SubstituteTracker
 import ru.palustris.music.media.TrackDownload
 import ru.palustris.music.ui.common.TrackActions
 import ru.palustris.music.ui.common.TrackMarks
@@ -69,7 +71,11 @@ constructor(
   /** Уровни звука для анимации плеера. */
   val levels: AudioLevels,
   equalizer: EqualizerStore,
+  substitutes: SubstituteTracker,
 ) : ViewModel(), TrackActions, PlayerControls {
+
+  /** Треки, которые играют из запасного источника: YouTube их не отдал. */
+  val substitutes: StateFlow<Map<String, Substitute>> = substitutes.current
 
   /** Ссылка на плейлист (`/s/{slug}`), которую открыли из другого приложения. */
   private val _openLink = MutableStateFlow<String?>(null)

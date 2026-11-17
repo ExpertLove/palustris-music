@@ -20,6 +20,8 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import ru.palustris.music.BuildConfig
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.prefs.SessionStore
+import ru.palustris.music.media.SubstituteInterceptor
+import ru.palustris.music.media.SubstituteTracker
 
 /** Скоуп на всё время жизни процесса: для работы, которая не должна обрываться с экраном. */
 @Qualifier @Retention(AnnotationRetention.BINARY) annotation class AppScope
@@ -42,12 +44,14 @@ object AppModule {
 
   @Provides
   @Singleton
-  fun okHttp(session: SessionStore): OkHttpClient =
+  fun okHttp(session: SessionStore, substitutes: SubstituteTracker): OkHttpClient =
     OkHttpClient.Builder()
       .connectTimeout(15, TimeUnit.SECONDS)
       // Первая загрузка трека и перекодирование в Opus на сервере занимают секунды.
       .readTimeout(90, TimeUnit.SECONDS)
       .addInterceptor(AuthInterceptor(session))
+      // Треки, которые играют из запасного источника (заголовки X-Substitute).
+      .addInterceptor(SubstituteInterceptor(substitutes))
       .build()
 
   @Provides

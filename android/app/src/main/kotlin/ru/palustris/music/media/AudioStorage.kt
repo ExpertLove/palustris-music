@@ -7,6 +7,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -73,6 +74,7 @@ constructor(
   private val settings: SettingsStore,
   private val json: Json,
   private val loudness: LoudnessStore,
+  private val substitutes: SubstituteTracker,
   @AppScope private val scope: CoroutineScope,
 ) {
   private val databaseProvider by lazy { StandaloneDatabaseProvider(context) }
@@ -118,6 +120,10 @@ constructor(
       CacheDataSource.Factory()
         .setCache(cache)
         .setUpstreamDataSourceFactory(upstream)
+        // Запись из запасного источника не кэшируем под id оригинала, см. [SkipSubstituteSinkFactory].
+        .setCacheWriteDataSinkFactory(
+          SkipSubstituteSinkFactory(CacheDataSink.Factory().setCache(cache), substitutes::isSubstituted)
+        )
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     // Плееру всегда даём адрес потока «как на сервере». Если трек скачан, подменяем ключ и
     // адрес на скачанную копию: она уже целиком в кэше, и сеть не нужна.
@@ -140,7 +146,7 @@ constructor(
       val existing = _downloads.value[t.id]
       if (existing != null && existing.state != TrackDownload.State.Failed) continue
       val request =
-        DownloadRequest.Builder(t.id, Streams.uri(t, quality))
+        DownloadRequest.Builder(t.id, Streams.uri(t, quality, download = true))
           .setCustomCacheKey(Streams.cacheKey(t.id, quality))
           .setData(json.encodeToString(Track.serializer(), t.copy(why = null)).encodeToByteArray())
           .build()

@@ -15,14 +15,20 @@ import ru.palustris.music.core.prefs.DownloadQuality
 object Streams {
   private const val PATH = "api/stream/"
 
-  fun uri(track: Track, quality: DownloadQuality? = null): Uri =
+  /**
+   * `download = true` — адрес для скачивания (`dl=1`): сервер не подставляет запись из запасного
+   * источника, в «Скачанных» должен лежать оригинал.
+   */
+  fun uri(track: Track, quality: DownloadQuality? = null, download: Boolean = false): Uri =
     BuildConfig.API_BASE_URL.toUri()
       .buildUpon()
       .appendEncodedPath(PATH + track.id)
-      // По исполнителю и названию сервер ищет замену, если исходное видео недоступно.
+      // По исполнителю, названию и длительности сервер ищет замену, если исходное видео недоступно.
       .appendQueryParameter("a", track.artist)
       .appendQueryParameter("t", track.title)
+      .apply { if (track.duration > 0) appendQueryParameter("d", track.duration.toString()) }
       .apply { quality?.param?.let { appendQueryParameter("q", it) } }
+      .apply { if (download) appendQueryParameter("dl", "1") }
       .build()
 
   fun trackId(uri: Uri): String? {

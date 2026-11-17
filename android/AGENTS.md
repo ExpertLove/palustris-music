@@ -104,7 +104,8 @@ ru.palustris.music
 │          LibraryTree (catalog for Android Auto), ArtworkProvider (content:// artwork for the car),
 │          PlayerConnection (MediaController → StateFlow<PlayerState> for UI, incl. `upNext` in play order;
 │          move/remove/clear-up-next), QueueStore (filesDir/queue.json),
-│          SleepTimer, AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
+│          SleepTimer, AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems,
+│          Substitutes (SubstituteTracker + OkHttp interceptor + SkipSubstituteSinkFactory, see «Fallback sources» below)
 │   audio/ LoudnessProcessor → (eq) → LevelProcessor → CrossfadeProcessor, StreamInfo, LoudnessStore (+ LoudnessMath),
 │          LevelMeter (AudioLevels: 16-band spectrum snapshots keyed by track position, for the player animation)
 │   eq/    EqMath (bands/formulas = website), EqualizerProcessor (BaseAudioProcessor, PCM16), EqualizerStore (DataStore)
@@ -201,7 +202,7 @@ Also verified (0.5.0), debug and release (R8):
 - sign-up with 3 genres → profile shows them and «Моя волна» says «Твой жанр: Инди»; Back on step 2 keeps the form;
   the throwaway account was deleted through the app (server answers 401 for it).
 
-Unit tests (54): Taste (6: artist keys equal the server's, featured artists, pending dislikes/blocks over the server
+Unit tests (57): Substitutes (3: header decoding, only playback streams are watched, tracker), Taste (6: artist keys equal the server's, featured artists, pending dislikes/blocks over the server
 answer, dislike+undo cancel in the outbox, new ops JSON round trip incl. old listens, listen body), LevelMeter (3: FFT
 bin, snapshot at the player position, other track / stale snapshot), PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
 wrap on overload), LRC parser, CrossfadeProcessor (10: blend shape, plan revoked → tail played out, seek and skip
@@ -276,6 +277,26 @@ Also verified (0.6.0), debug and release (R8):
 - stats (week tab, charts, top artist with photo, streaks), Wrapped stories (all cards, share sheet with the PNG);
 - crossfade 6 s still works with LevelProcessor in the chain (log «tail 6000ms, crossfade», next flush mix=true);
 - release: start, wave, dislike via outbox (server got it), undo, stats, Hidden; LibraryBrowseTest passes.
+
+### Fallback sources (0.6.1)
+
+When YouTube does not give the server a track, `/api/stream/{id}` may return the same recording from Audius, SoundCloud
+or archive.org (strict matching on the server, `server/src/sources.rs`, `docs/YOUTUBE.md`). The response carries
+`X-Substitute: audius|soundcloud|archive` + percent-encoded `X-Substitute-Title`/`-Artist` and `Cache-Control: no-store`.
+- `Streams.uri` sends `d` (duration, s) so the server can accept re-uploads with the same length; downloads add `dl=1`
+  (`download = true`): the server never substitutes for downloads, so «Скачанные» only ever hold the original.
+- `SubstituteInterceptor` (on the shared OkHttpClient) reads the headers of playback stream responses and updates
+  `SubstituteTracker` (id → `Substitute`, cleared when the original plays again).
+- `SkipSubstituteSinkFactory` wraps the player's `CacheDataSink`: `TeeDataSource` opens the network first (the
+  interceptor has already marked the track), then the sink, which skips writing for substituted keys. Verified on the
+  emulator: ~1 min of a substituted track played, the key is in the cache index but no span files exist for it.
+- Full player: «Версия с archive.org» under the artist (tertiary colour), tap → dialog that explains it and that the
+  download will work once YouTube gives the track again. The mini player shows nothing (no room).
+- Known: for VBR mp3 substitutes without a Xing header ExoPlayer estimates the duration (5:55 shown as 4:41).
+
+Verified (0.6.1), debug and release (R8): test playlist with a fake id + an archive.org-only track (American Green,
+«She Goes To France»): plays, note and dialog shown, position advances (release: `dumpsys media_session`), nothing
+written to the cache; a normal wave track still plays and caches.
 
 ### Recommendations and the living player (0.6.0)
 
