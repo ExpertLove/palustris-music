@@ -51,6 +51,7 @@ import ru.palustris.music.media.audio.LoudnessProcessor
 import ru.palustris.music.media.audio.LoudnessStore
 import ru.palustris.music.media.eq.EqualizerProcessor
 import ru.palustris.music.media.eq.EqualizerStore
+import ru.palustris.music.widget.NowPlayingStore
 import timber.log.Timber
 
 /**
@@ -69,6 +70,7 @@ class PlaybackService : MediaSessionService() {
   @Inject lateinit var loudness: LoudnessStore
   @Inject lateinit var settings: SettingsStore
   @Inject lateinit var outbox: Outbox
+  @Inject lateinit var nowPlaying: NowPlayingStore
 
   private var session: MediaSession? = null
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -100,6 +102,22 @@ class PlaybackService : MediaSessionService() {
         .setWakeMode(C.WAKE_MODE_NETWORK)
         .build()
     player.addListener(Reporter(player))
+    // Виджет на главном экране узнаёт о смене трека и паузе отсюда.
+    player.addListener(
+      object : Player.Listener {
+        override fun onEvents(p: Player, events: Player.Events) {
+          if (
+            events.containsAny(
+              Player.EVENT_MEDIA_ITEM_TRANSITION,
+              Player.EVENT_PLAY_WHEN_READY_CHANGED,
+              Player.EVENT_PLAYBACK_STATE_CHANGED,
+              Player.EVENT_MEDIA_METADATA_CHANGED,
+              Player.EVENT_TIMELINE_CHANGED,
+            )
+          ) nowPlaying.onPlayer(p)
+        }
+      }
+    )
     sleepTimer.player = player
     restoreQueue(player)
     persistQueue(player)
@@ -194,6 +212,7 @@ class PlaybackService : MediaSessionService() {
     session?.player?.let { p -> queueStore.snapshot(p).let { q -> runBlocking { queueStore.save(q) } } }
     sleepTimer.cancel()
     sleepTimer.player = null
+    nowPlaying.onStopped()
     scope.cancel()
     session?.run {
       player.release()

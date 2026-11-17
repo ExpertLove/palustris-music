@@ -24,6 +24,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Widgets
+import androidx.compose.ui.platform.LocalContext
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
+import android.content.Context
+import ru.palustris.music.widget.MusicWidgetReceiver
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -73,6 +79,8 @@ fun SettingsScreen(
   val me by vm.me.collectAsStateWithLifecycle()
   val pending by vm.pending.collectAsStateWithLifecycle()
   var confirmRemove by remember { mutableStateOf(false) }
+  val context = LocalContext.current
+  val canPinWidget = remember { AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported }
 
   LazyColumn(contentPadding = contentPadding) {
     item {
@@ -125,6 +133,24 @@ fun SettingsScreen(
               onClick = { vm.setCrossfade(sec) },
               label = { Text(if (sec == 0) "Выключен" else "$sec с") },
             )
+          }
+        }
+      }
+    }
+
+    if (canPinWidget) {
+      item {
+        GroupCard(onClick = { pinWidget(context) }) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+              Text("Виджет на главный экран", style = MaterialTheme.typography.titleMedium)
+              Text(
+                "Обложка и кнопки: играть, назад, вперёд. Не нужно открывать приложение",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            Icon(Icons.Rounded.Widgets, null)
           }
         }
       }
@@ -299,4 +325,9 @@ private fun Legend(color: Color, title: String, value: String) {
     Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
     Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
   }
+}
+
+/** Системное окно «Добавить виджет»: лаунчер сам предложит место на главном экране. */
+private fun pinWidget(context: Context) {
+  AppWidgetManager.getInstance(context).requestPinAppWidget(ComponentName(context, MusicWidgetReceiver::class.java), null, null)
 }

@@ -8,4 +8,5 @@
         <item quantity="many">Скачивается %d треков</item>
         <item quantity="other">Скачивается %d трека</item>
     </plurals>
+    <string name="widget_description">Что играет сейчас: обложка и кнопки управления</string>
 </resources>
