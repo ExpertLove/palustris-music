@@ -4,7 +4,8 @@ import { EQ_PRESETS } from '../lib/data'
 import { bigThumb, shuffled } from '../lib/format'
 import type { Track } from '../lib/types'
 import { toast } from '../store/ui'
-import { engine } from './engine'
+import { engine, isIOS } from './engine'
+import { levelOf, requestLoudness } from './loudness'
 
 export type Repeat = 'off' | 'all' | 'one'
 
@@ -146,7 +147,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
     source: null,
     wave: false,
     crossfade: 0,
-    normalize: false,
+    // Ровная громкость по умолчанию включена, как в приложении. На iPhone — нет: для неё нужен Web Audio,
+    // а с ним Safari может прерывать звук на заблокированном экране.
+    normalize: !isIOS,
     eq: defaultEq,
     sleepAt: null,
     sleepEndOfTrack: false,
@@ -359,6 +362,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     setNormalize: (normalize) => {
       engine.setNormalize(normalize)
       set({ normalize })
+      if (normalize) askLoudness()
     },
     setRate: (rate) => {
       engine.setRate(rate)
@@ -372,6 +376,22 @@ export const usePlayer = create<PlayerState>((set, get) => {
     },
   }
 })
+
+// ───────────── ровная громкость ─────────────
+
+engine.setLevelProvider((t) => levelOf(t.id))
+engine.setNormalize(usePlayer.getState().normalize, false)
+
+let lastLoudnessAsk = 0
+/** Громкость текущего и трёх следующих треков; неизвестные сервер посчитает, спросим ещё раз позже. */
+function askLoudness() {
+  const s = usePlayer.getState()
+  if (!s.normalize || s.index < 0) return
+  lastLoudnessAsk = Date.now()
+  const ids = s.queue.slice(s.index, s.index + 4).map((t) => t.id)
+  if (s.repeat === 'all' && s.queue.length) ids.push(s.queue[0].id)
+  requestLoudness(ids, () => engine.refreshLevels())
+}
 
 // ───────────── события движка ─────────────
 
@@ -394,6 +414,7 @@ engine.setHandlers({
       preloadedFor = cur.id
       engine.preload(nxt)
     }
+    if (Date.now() - lastLoudnessAsk > 5000) askLoudness()
     if (nxt && s.crossfade > 0 && left <= s.crossfade && left > 0.4 && fadedFrom !== cur.id && !s.sleepEndOfTrack) {
       fadedFrom = cur.id
       if (engine.crossfadeTo(nxt, Math.min(s.crossfade, left))) {
@@ -439,6 +460,7 @@ engine.setHandlers({
   buffering: (buffering) => usePlayer.setState({ buffering }),
   started: (t) => {
     errorsInRow = 0
+    askLoudness()
     if (prefetchedFor === t.id) return
     prefetchedFor = t.id
     const s = usePlayer.getState()
@@ -518,6 +540,9 @@ interface Saved {
   wave: boolean
   crossfade: number
   normalize: boolean
+  /** Ровная громкость с явным выбором. До версии с громкостью трека с сервера было только `normalize`
+   *  (компрессор, по умолчанию выключен), поэтому его `false` не считаем выбором пользователя. */
+  level?: boolean
   eq: EqState
   unshuffled: Track[] | null
 }
@@ -543,7 +568,7 @@ export function restorePlayer() {
       source: saved.source || null,
       wave: !!saved.wave,
       crossfade: saved.crossfade || 0,
-      normalize: !!saved.normalize,
+      normalize: saved.level ?? (saved.normalize ? true : !isIOS),
       eq,
       unshuffled: saved.unshuffled || null,
     })
@@ -551,7 +576,7 @@ export function restorePlayer() {
     engine.setMuted(!!saved.muted)
     if (saved.rate && saved.rate !== 1) engine.setRate(saved.rate)
     if (eq.on) engine.setEq(eq)
-    if (saved.normalize) engine.setNormalize(true)
+    engine.setNormalize(usePlayer.getState().normalize, false)
     const t = current(usePlayer.getState())
     if (t) {
       engine.load(t, { autoplay: false, startAt: saved.time || 0 })
@@ -578,6 +603,7 @@ export function restorePlayer() {
       wave: s.wave,
       crossfade: s.crossfade,
       normalize: s.normalize,
+      level: s.normalize,
       eq: s.eq,
       unshuffled: s.unshuffled ? s.unshuffled.slice(0, 300) : null,
     }

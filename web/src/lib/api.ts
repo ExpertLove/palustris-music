@@ -120,6 +120,8 @@ export const api = {
   clearHistory: () => del<null>('/history'),
   skip: (t: Track) => post<null>('/skip', strip(t)),
   prefetch: (ids: string[]) => post<null>('/prefetch', { ids }),
+  /** Громкость треков (LUFS и пик); неизвестных серверу в ответе нет. */
+  loudness: (ids: string[]) => post<Record<string, { lufs: number; peak: number }>>('/loudness', { ids }),
 
   playlists: () => get<PlaylistRow[]>('/playlists'),
   playlist: (id: number) => get<PlaylistFull>(`/playlists/${id}`),

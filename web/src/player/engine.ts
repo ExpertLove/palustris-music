@@ -1,5 +1,6 @@
 // Аудиодвижок: две «деки» (для кроссфейда и бесшовного перехода) и цепочка Web Audio:
-// дека → гейн деки → предусилитель → 10 полос эквалайзера → [компрессор] → мастер → анализатор → выход.
+// дека → гейн деки (переход) → уровень трека (ровная громкость) → предусилитель → 10 полос эквалайзера →
+// мастер → анализатор → выход.
 import { streamUrl } from '../lib/api'
 import type { Track } from '../lib/types'
 import { EQ_BANDS } from '../lib/data'
@@ -21,7 +22,10 @@ interface Deck {
   el: HTMLAudioElement
   track: Track | null
   src: MediaElementAudioSourceNode | null
+  /** Кроссфейд: 0…1. */
   gain: GainNode | null
+  /** Ровная громкость: множитель этого трека. Отдельная линия, чтобы переход и выравнивание не мешали друг другу. */
+  level: GainNode | null
 }
 
 const dB = (v: number) => Math.pow(10, v / 20)
@@ -33,14 +37,13 @@ export class Engine {
   analyser: AnalyserNode | null = null
   private preamp: GainNode | null = null
   private filters: BiquadFilterNode[] = []
-  private comp: DynamicsCompressorNode | null = null
-  private makeup: GainNode | null = null
   private master: GainNode | null = null
   private volume = 0.9
   private muted = false
   private rate = 1
   private eq = { on: false, gains: new Array(10).fill(0) as number[], preamp: 0 }
   private normalize = false
+  private levelOf: (t: Track) => number = () => 1
   private fading = false
   private on: Partial<EngineEvents> = {}
 
@@ -66,7 +69,7 @@ export class Engine {
     const el = new Audio()
     el.preload = 'auto'
     el.crossOrigin = 'use-credentials'
-    const d: Deck = { el, track: null, src: null, gain: null }
+    const d: Deck = { el, track: null, src: null, gain: null, level: null }
     const mine = () => this.decks?.[this.active] === d
     el.addEventListener('timeupdate', () => mine() && this.on.time?.(el.currentTime, el.duration || d.track?.duration || 0))
     el.addEventListener('durationchange', () => mine() && this.on.time?.(el.currentTime, el.duration || 0))
@@ -110,14 +113,6 @@ export class Engine {
         b.gain.value = 0
         return b
       })
-      this.comp = ctx.createDynamicsCompressor()
-      this.comp.threshold.value = -24
-      this.comp.knee.value = 24
-      this.comp.ratio.value = 4
-      this.comp.attack.value = 0.01
-      this.comp.release.value = 0.25
-      this.makeup = ctx.createGain()
-      this.makeup.gain.value = dB(5)
       this.master = ctx.createGain()
       this.analyser = ctx.createAnalyser()
       this.analyser.fftSize = 512
@@ -127,12 +122,14 @@ export class Engine {
         d.src = ctx.createMediaElementSource(d.el)
         d.gain = ctx.createGain()
         d.gain.gain.value = d === this.decks[this.active] ? 1 : 0
-        d.src.connect(d.gain).connect(this.preamp)
+        d.level = ctx.createGain()
+        d.level.gain.value = this.levelFor(d)
+        d.src.connect(d.gain).connect(d.level).connect(this.preamp)
         d.el.volume = 1
       }
       let node: AudioNode = this.preamp
       for (const f of this.filters) node = node.connect(f)
-      this.routeTail()
+      node.connect(this.master)
       this.master.connect(this.analyser).connect(ctx.destination)
       this.applyEq()
       this.applyVolume()
@@ -145,14 +142,40 @@ export class Engine {
     }
   }
 
-  private routeTail() {
-    const last = this.filters[this.filters.length - 1]
-    if (!last || !this.master || !this.comp || !this.makeup) return
-    last.disconnect()
-    this.comp.disconnect()
-    this.makeup.disconnect()
-    if (this.normalize) last.connect(this.comp).connect(this.makeup).connect(this.master)
-    else last.connect(this.master)
+  private levelFor(d: Deck): number {
+    return this.normalize && d.track ? this.levelOf(d.track) : 1
+  }
+
+  /** Уровень деки: сразу (трек только что загружен) или плавно (громкость пришла посреди трека). */
+  private applyLevel(d: Deck, smooth: boolean) {
+    if (!this.ctx || !d.level) return
+    const p = d.level.gain
+    const v = this.levelFor(d)
+    const t = this.ctx.currentTime
+    p.cancelScheduledValues(0)
+    if (smooth) {
+      p.setValueAtTime(p.value, t)
+      p.setTargetAtTime(v, t, 0.25)
+    } else {
+      p.setValueAtTime(v, t)
+    }
+  }
+
+  /** Откуда брать множитель трека (см. loudness.ts). */
+  setLevelProvider(fn: (t: Track) => number) {
+    this.levelOf = fn
+  }
+
+  /** Пришла громкость каких-то треков: плавно подстраиваем обе деки. */
+  refreshLevels() {
+    for (const d of this.decks) this.applyLevel(d, true)
+  }
+
+  /** Сразу, без автоматизации: обрывает и запланированные кривые перехода. */
+  private setNow(p: AudioParam, v: number) {
+    if (!this.ctx) return
+    p.cancelScheduledValues(0)
+    p.setValueAtTime(v, this.ctx.currentTime)
   }
 
   private applyEq() {
@@ -195,10 +218,12 @@ export class Engine {
     if (eq.on) this.ensureGraph(true)
     this.applyEq()
   }
-  setNormalize(n: boolean) {
+  /** `force` — включить Web Audio сразу (по жесту пользователя). При восстановлении не форсируем:
+   *  цепочка всё равно создаётся при первом запуске музыки, а на iPhone без нужды её лучше не включать. */
+  setNormalize(n: boolean, force = true) {
     this.normalize = n
-    if (n) this.ensureGraph(true)
-    this.routeTail()
+    if (n && force) this.ensureGraph(true)
+    this.refreshLevels()
   }
 
   /** АЧХ текущей цепочки для кривой на экране эквалайзера. */
@@ -219,6 +244,7 @@ export class Engine {
     d.el.src = streamUrl(t)
     d.el.playbackRate = this.rate
     d.el.preservesPitch = true
+    this.applyLevel(d, false)
   }
 
   /** Загрузить трек в активную деку (или взять уже подгруженный во второй). */
@@ -236,7 +262,7 @@ export class Engine {
     const d = this.decks[this.active]
     for (const x of this.decks) {
       if (x !== d) x.el.pause()
-      if (x.gain && this.ctx) x.gain.gain.setValueAtTime(x === d ? 1 : 0, this.ctx.currentTime)
+      if (x.gain) this.setNow(x.gain.gain, x === d ? 1 : 0)
     }
     if (opts.startAt) {
       const s = opts.startAt
@@ -270,7 +296,8 @@ export class Engine {
     d.el.load()
   }
 
-  /** Плавный переход: новый трек нарастает, старый затихает. */
+  /** Плавный переход: новый трек нарастает по синусу, старый затихает по косинусу. Сумма мощностей
+   *  sin² + cos² = 1, поэтому посередине громкость не проседает (как в Android-приложении). */
   crossfadeTo(t: Track, secs: number): boolean {
     if (!this.ctx || secs <= 0) return false
     const from = this.decks[this.active]
@@ -278,12 +305,27 @@ export class Engine {
     if (to.track?.id !== t.id || !to.el.src) this.setSrc(to, t)
     to.el.currentTime = 0
     const now = this.ctx.currentTime
-    to.gain!.gain.cancelScheduledValues(now)
-    to.gain!.gain.setValueAtTime(0.0001, now)
-    to.gain!.gain.exponentialRampToValueAtTime(1, now + secs)
-    from.gain!.gain.cancelScheduledValues(now)
-    from.gain!.gain.setValueAtTime(from.gain!.gain.value || 1, now)
-    from.gain!.gain.linearRampToValueAtTime(0, now + secs)
+    const start = from.gain!.gain.value || 1
+    const n = 64
+    const fadeIn = new Float32Array(n)
+    const fadeOut = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const a = ((i / (n - 1)) * Math.PI) / 2
+      fadeIn[i] = Math.sin(a)
+      fadeOut[i] = Math.cos(a) * start
+    }
+    try {
+      to.gain!.gain.cancelScheduledValues(0)
+      to.gain!.gain.setValueCurveAtTime(fadeIn, now, secs)
+      from.gain!.gain.cancelScheduledValues(0)
+      from.gain!.gain.setValueCurveAtTime(fadeOut, now, secs)
+    } catch {
+      // Старые браузеры: линейно.
+      this.setNow(to.gain!.gain, 0)
+      to.gain!.gain.linearRampToValueAtTime(1, now + secs)
+      this.setNow(from.gain!.gain, start)
+      from.gain!.gain.linearRampToValueAtTime(0, now + secs)
+    }
     this.fading = true
     this.active = 1 - this.active
     to.el.play().catch(() => this.on.error?.(t))

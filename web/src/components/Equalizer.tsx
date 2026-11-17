@@ -207,7 +207,7 @@ export function Equalizer() {
         <div className="setting">
           <div className="txt">
             <b>Ровная громкость</b>
-            <span>Тихие треки станут громче, громкие — тише.</span>
+            <span>Все треки звучат одинаково громко, сам звук не сжимается.</span>
           </div>
           <button type="button" className="switch" role="switch" aria-checked={normalize} aria-label="Ровная громкость" onClick={() => setNormalize(!normalize)} />
         </div>
