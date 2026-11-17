@@ -19,8 +19,13 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import com.google.common.collect.ImmutableList
+import kotlinx.coroutines.guava.future
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
@@ -55,13 +60,14 @@ import ru.palustris.music.widget.NowPlayingStore
 import timber.log.Timber
 
 /**
- * Воспроизведение в фоне: ExoPlayer внутри MediaSessionService. Media3 сама держит сервис
+ * Воспроизведение в фоне: ExoPlayer внутри MediaLibraryService (это MediaSessionService плюс
+ * каталог для Android Auto, см. [LibraryTree]). Media3 сама держит сервис
  * на переднем плане, пока играет музыка, и показывает уведомление с управлением, которое
  * работает и на экране блокировки, и с кнопок гарнитуры.
  */
 @OptIn(UnstableApi::class)
 @AndroidEntryPoint
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaLibraryService() {
   @Inject lateinit var storage: AudioStorage
   @Inject lateinit var api: MusicApi
   @Inject lateinit var equalizer: EqualizerStore
@@ -72,7 +78,9 @@ class PlaybackService : MediaSessionService() {
   @Inject lateinit var outbox: Outbox
   @Inject lateinit var nowPlaying: NowPlayingStore
 
-  private var session: MediaSession? = null
+  @Inject lateinit var tree: LibraryTree
+
+  private var session: MediaLibrarySession? = null
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
   /** Пишется на главном потоке, читается аудиопотоком в [CrossfadeProcessor]. */
@@ -130,13 +138,13 @@ class PlaybackService : MediaSessionService() {
         Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
       )
-    session = MediaSession.Builder(this, player).setSessionActivity(open).setCallback(Callback()).build()
+    session = MediaLibrarySession.Builder(this, player, Callback()).setSessionActivity(open).build()
     setMediaNotificationProvider(
       DefaultMediaNotificationProvider.Builder(this).build().also { it.setSmallIcon(R.drawable.ic_stat_music) }
     )
   }
 
-  override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+  override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
   private fun audioProcessors(): Array<AudioProcessor> {
     val chain =
@@ -222,13 +230,55 @@ class PlaybackService : MediaSessionService() {
     super.onDestroy()
   }
 
-  private inner class Callback : MediaSession.Callback {
+  /**
+   * Сессия для приложения, системы и Android Auto. Библиотеку (лайки, плейлисты) видят только
+   * доверенные клиенты: само приложение, система и машина. Остальным — только управление.
+   */
+  private inner class Callback : MediaLibrarySession.Callback {
+    override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+      val trusted = controller.packageName == packageName || controller.isTrusted || controller.packageName in LIBRARY_CLIENTS
+      return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+        .setAvailableSessionCommands(
+          if (trusted) MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+          else MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+        )
+        .build()
+    }
+
     override fun onAddMediaItems(
       mediaSession: MediaSession,
       controller: MediaSession.ControllerInfo,
       mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> =
-      Futures.immediateFuture(mediaItems.map { it.withPlayableUri() }.toMutableList())
+      scope.future {
+        // Трек из списка в машине: в очередь встаёт сам трек, а не элемент каталога.
+        mediaItems
+          .flatMap { m ->
+            val resolved = if (m.mediaId.startsWith(LibraryTree.ITEM) || m.mediaId == LibraryTree.WAVE) tree.resolve(listOf(m)) else null
+            if (resolved != null) {
+              val t = resolved.tracks[resolved.index]
+              listOf(t.toMediaItem(resolved.source))
+            } else listOf(m.withPlayableUri())
+          }
+          .toMutableList()
+      }
+
+    /** Нажали трек в машине: весь список с этого трека; «Моя волна» и голосовой поиск — тоже тут. */
+    override fun onSetMediaItems(
+      mediaSession: MediaSession,
+      controller: MediaSession.ControllerInfo,
+      mediaItems: MutableList<MediaItem>,
+      startIndex: Int,
+      startPositionMs: Long,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+      scope.future {
+        val r = tree.resolve(mediaItems)
+        if (r != null) {
+          MediaSession.MediaItemsWithStartPosition(r.tracks.map { it.toMediaItem(r.source) }, r.index, C.TIME_UNSET)
+        } else {
+          MediaSession.MediaItemsWithStartPosition(mediaItems.map { it.withPlayableUri() }, startIndex, startPositionMs)
+        }
+      }
 
     /**
      * Кнопка «играть» на гарнитуре или в системной шторке, когда приложение не запущено:
@@ -243,6 +293,60 @@ class PlaybackService : MediaSessionService() {
       return Futures.immediateFuture(
         MediaSession.MediaItemsWithStartPosition(with(queueStore) { q.toMediaItems() }, q.index, q.positionMs)
       )
+    }
+
+    override fun onGetLibraryRoot(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<MediaItem>> = Futures.immediateFuture(LibraryResult.ofItem(tree.root(), params))
+
+    override fun onGetItem(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      mediaId: String,
+    ): ListenableFuture<LibraryResult<MediaItem>> =
+      scope.future {
+        tree.item(mediaId)?.let { LibraryResult.ofItem(it, null) } ?: LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+      }
+
+    override fun onGetChildren(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      parentId: String,
+      page: Int,
+      pageSize: Int,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
+      scope.future { LibraryResult.ofItemList(paged(tree.children(parentId), page, pageSize), params) }
+
+    override fun onSearch(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      query: String,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<Void>> =
+      scope.future {
+        val found = tree.search(query)
+        session.notifySearchResultChanged(browser, query, found.size, params)
+        LibraryResult.ofVoid()
+      }
+
+    override fun onGetSearchResult(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      query: String,
+      page: Int,
+      pageSize: Int,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
+      scope.future { LibraryResult.ofItemList(paged(tree.searchItems(), page, pageSize), params) }
+
+    private fun paged(all: List<MediaItem>, page: Int, size: Int): ImmutableList<MediaItem> {
+      if (size <= 0 || size == Int.MAX_VALUE) return ImmutableList.copyOf(all)
+      val from = page.toLong() * size
+      if (from >= all.size) return ImmutableList.of()
+      return ImmutableList.copyOf(all.subList(from.toInt(), minOf(all.size, from.toInt() + size)))
     }
   }
 
@@ -371,6 +475,15 @@ class PlaybackService : MediaSessionService() {
   }
 
   private companion object {
+    /** Кому показываем библиотеку, кроме доверенных системой: Android Auto, Ассистент, часы. */
+    val LIBRARY_CLIENTS =
+      setOf(
+        "com.google.android.projection.gearhead",
+        "com.google.android.carassistant",
+        "com.google.android.googlequicksearchbox",
+        "com.google.android.wearable.app",
+        "com.android.systemui",
+      )
     const val MIN_CROSSFADE_TRACK_MS = 20_000L
     const val NEXT_BUFFERED_MS = 2_000L
   }

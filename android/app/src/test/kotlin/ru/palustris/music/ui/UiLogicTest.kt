@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.palustris.music.core.model.Track
+import ru.palustris.music.media.LibraryTree
 import ru.palustris.music.ui.account.initials
 import ru.palustris.music.ui.chart.REGIONS
 import ru.palustris.music.ui.chart.resolveRegion
@@ -42,6 +43,15 @@ class UiLogicTest {
   fun moodsHaveThreeQueriesAndUniqueIds() {
     assertEquals(MOODS.size, MOODS.map { it.id }.toSet().size)
     assertTrue(MOODS.all { it.queries.size == 3 && it.queries.toSet().size == 3 })
+  }
+
+  @Test
+  fun autoListItemIdsRoundTrip() {
+    assertEquals("pl:5" to "abc_-1", LibraryTree.parseItem("item|pl:5|abc_-1"))
+    assertEquals("mood:night" to "x", LibraryTree.parseItem("item|mood:night|x"))
+    // Обычный id трека, даже начинающийся с «item», — не элемент каталога.
+    assertEquals(null, LibraryTree.parseItem("itemAbc1234"))
+    assertEquals(null, LibraryTree.parseItem("item||x"))
   }
 
   @Test

@@ -51,10 +51,22 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!-- Android Auto: приложение — медиаплеер с каталогом (PlaybackService) -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- Обложки для Android Auto (content://), только с хостов обложек YouTube и Google -->
+        <provider
+            android:name=".media.ArtworkProvider"
+            android:authorities="${applicationId}.artwork"
+            android:exported="true" />
 
         <!-- Кнопка «играть» на гарнитуре, когда приложение закрыто: продолжить с того же места -->
         <receiver
