@@ -90,6 +90,41 @@ fun SettingsScreen(
         }
       }
     }
+    item {
+      Card(onClick = { vm.setNormalize(!settings.normalize) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Column(Modifier.weight(1f)) {
+            Text("Выравнивать громкость", style = MaterialTheme.typography.titleMedium)
+            Text(
+              "Тихие и громкие треки звучат одинаково, не нужно крутить громкость",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Switch(checked = settings.normalize, onCheckedChange = vm::setNormalize)
+        }
+      }
+    }
+    item {
+      Card {
+        Text("Плавный переход", style = MaterialTheme.typography.titleMedium)
+        Text(
+          "Конец трека плавно перетекает в начало следующего",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Settings.CROSSFADE_OPTIONS_SEC.forEach { sec ->
+            FilterChip(
+              selected = settings.crossfadeSec == sec,
+              onClick = { vm.setCrossfade(sec) },
+              label = { Text(if (sec == 0) "Выключен" else "$sec с") },
+            )
+          }
+        }
+      }
+    }
 
     item { Header("Память телефона") }
     item { Card { StorageCard(usage, settings) } }

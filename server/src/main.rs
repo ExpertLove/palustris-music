@@ -3,6 +3,7 @@ mod admin;
 mod audio;
 mod compact;
 mod db;
+mod loudness;
 mod lyrics;
 mod mail;
 mod recs;
@@ -39,6 +40,8 @@ struct AppState {
     failed: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// Аккаунты YouTube и журнал загрузок.
     accounts: Arc<accounts::Accounts>,
+    /// Громкость треков для выравнивания в приложении.
+    loudness: Arc<loudness::Analyzer>,
     /// Почты администраторов (MUSIC_ADMINS), в нижнем регистре.
     admins: Vec<String>,
     data: std::path::PathBuf,
@@ -898,6 +901,32 @@ async fn prefetch(State(st): St, h: HeaderMap, Json(b): Json<PrefetchBody>) -> A
     Ok(Json(()))
 }
 
+/// Громкость треков (LUFS и true peak) для выравнивания. Неизвестные в ответ не попадают;
+/// если трек уже есть в кэше, он встаёт в очередь на анализ, и клиент спросит снова позже.
+async fn loudness_handler(
+    State(st): St,
+    h: HeaderMap,
+    Json(b): Json<PrefetchBody>,
+) -> ApiResult<std::collections::HashMap<String, loudness::Loudness>> {
+    uid(&st, &h)?;
+    let mut out = std::collections::HashMap::new();
+    for id in b.ids.iter().filter(|id| audio::valid_id(id)).take(100) {
+        // Трек мог играть из запасного videoId: файл и громкость лежат под ним.
+        let file_id = st.alt.lock().ok().and_then(|m| m.get(id).cloned()).unwrap_or_else(|| id.clone());
+        match st.loudness.get(&file_id) {
+            Some(l) => {
+                out.insert(id.clone(), l);
+            }
+            None => {
+                if let Some(p) = st.audio.cached(&file_id) {
+                    st.loudness.enqueue(&file_id, &p);
+                }
+            }
+        }
+    }
+    Ok(Json(out))
+}
+
 // ───────────────────────── библиотека ─────────────────────────
 
 async fn likes(State(st): St, h: HeaderMap) -> ApiResult<Vec<Track>> {
@@ -1359,6 +1388,12 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
+    let loudness = loudness::Analyzer::start(db::open(&db_path)?);
+    let audio = audio::Audio::new(cache_dir, ytdlp, accounts.clone());
+    {
+        let l = loudness.clone();
+        let _ = audio.on_ready.set(Box::new(move |id: &str, path: &std::path::Path| l.enqueue(id, path)));
+    }
 
     let state = Arc::new(AppState {
         db: Mutex::new(conn),
@@ -1368,12 +1403,13 @@ async fn main() -> anyhow::Result<()> {
             .build()?,
         cache: yt::SearchCache::default(),
         top: Mutex::new(std::collections::HashMap::new()),
-        audio: audio::Audio::new(cache_dir, ytdlp, accounts.clone()),
+        audio,
         mail: mail::Mailer::from_env(),
         attempts: Mutex::new(std::collections::HashMap::new()),
         alt: Mutex::new(std::collections::HashMap::new()),
         failed: Mutex::new(std::collections::HashMap::new()),
         accounts,
+        loudness,
         admins,
         data: std::path::PathBuf::from(&data),
         started: recs::now(),
@@ -1410,6 +1446,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/top", get(top))
         .route("/api/stream/{id}", get(stream))
         .route("/api/prefetch", post(prefetch))
+        .route("/api/loudness", post(loudness_handler))
         .route("/api/likes", get(likes).post(like))
         .route("/api/likes/{id}", delete(unlike))
         .route("/api/history", get(history_list).post(history).delete(history_clear))

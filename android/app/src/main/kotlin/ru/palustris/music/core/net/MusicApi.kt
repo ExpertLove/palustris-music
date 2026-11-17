@@ -21,6 +21,7 @@ import ru.palustris.music.core.model.PlaylistRow
 import ru.palustris.music.core.model.EmailBody
 import ru.palustris.music.core.model.IdsBody
 import ru.palustris.music.core.model.LoginResp
+import ru.palustris.music.core.model.Loudness
 import ru.palustris.music.core.model.Me
 import ru.palustris.music.core.model.SearchAll
 import ru.palustris.music.core.model.Track
@@ -54,6 +55,9 @@ interface MusicApi {
   @POST("api/skip") suspend fun skip(@Body track: Track)
 
   @POST("api/prefetch") suspend fun prefetch(@Body body: IdsBody)
+
+  /** Громкость известных серверу треков; остальных в ответе нет, спросить позже. */
+  @POST("api/loudness") suspend fun loudness(@Body body: IdsBody): Map<String, Loudness>
 
   @GET("api/lyrics")
   suspend fun lyrics(@Query("artist") artist: String, @Query("title") title: String, @Query("duration") duration: Long): Lyrics

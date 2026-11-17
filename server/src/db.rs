@@ -175,6 +175,12 @@ pub fn open(path: &Path) -> anyhow::Result<Connection> {
         CREATE INDEX IF NOT EXISTS dl_events_at ON dl_events(at);
         CREATE INDEX IF NOT EXISTS dl_events_video ON dl_events(video);
         CREATE INDEX IF NOT EXISTS history_track ON history(track_id);
+        CREATE TABLE IF NOT EXISTS loudness(
+            track_id TEXT PRIMARY KEY,
+            lufs REAL NOT NULL,
+            peak REAL NOT NULL,
+            at INTEGER NOT NULL
+        );
         "#,
     )?;
     Ok(c)

@@ -26,6 +26,9 @@ class EqSnapshot(val enabled: Boolean, val gains: FloatArray) {
  * Правила из media-playback-footguns: isActive не переопределяем (выключение — ветка внутри
  * queueInput), весь входной буфер съедаем, параметры читаем на каждом буфере,
  * в onFlush чистим только историю фильтров.
+ *
+ * Формат применяем в onFlush, а не в onConfigure: configure для следующего трека приходит,
+ * пока текущий ещё доигрывает, а новый формат вступает в силу только на flush.
  */
 @OptIn(UnstableApi::class)
 class EqualizerProcessor(private val settings: () -> EqSnapshot) : BaseAudioProcessor() {
@@ -40,10 +43,6 @@ class EqualizerProcessor(private val settings: () -> EqSnapshot) : BaseAudioProc
 
   override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
     if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) return AudioProcessor.AudioFormat.NOT_SET
-    sampleRate = inputAudioFormat.sampleRate
-    channels = inputAudioFormat.channelCount
-    state = DoubleArray(bands * channels * 4)
-    applied = null
     return inputAudioFormat
   }
 
@@ -91,6 +90,12 @@ class EqualizerProcessor(private val settings: () -> EqSnapshot) : BaseAudioProc
   }
 
   override fun onFlush() {
+    if (inputAudioFormat.sampleRate != sampleRate || inputAudioFormat.channelCount != channels) {
+      sampleRate = inputAudioFormat.sampleRate
+      channels = inputAudioFormat.channelCount
+      state = DoubleArray(bands * channels.coerceAtLeast(0) * 4)
+      applied = null // коэффициенты зависят от частоты
+    }
     state.fill(0.0)
   }
 

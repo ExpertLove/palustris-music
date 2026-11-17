@@ -37,6 +37,7 @@ import okhttp3.OkHttpClient
 import ru.palustris.music.core.AppScope
 import ru.palustris.music.core.model.Track
 import ru.palustris.music.core.prefs.SettingsStore
+import ru.palustris.music.media.audio.LoudnessStore
 import timber.log.Timber
 
 /** Состояние загрузки одного трека для интерфейса. */
@@ -71,6 +72,7 @@ constructor(
   okHttp: OkHttpClient,
   private val settings: SettingsStore,
   private val json: Json,
+  private val loudness: LoudnessStore,
   @AppScope private val scope: CoroutineScope,
 ) {
   private val databaseProvider by lazy { StandaloneDatabaseProvider(context) }
@@ -132,6 +134,8 @@ constructor(
 
   fun download(tracks: List<Track>) {
     val quality = settings.current.quality
+    // Громкость нужна и без интернета: запоминаем её вместе со скачиванием.
+    tracks.map { it.id }.chunked(100).forEach(loudness::request)
     for (t in tracks) {
       val existing = _downloads.value[t.id]
       if (existing != null && existing.state != TrackDownload.State.Failed) continue
@@ -196,6 +200,7 @@ constructor(
           downloadManager.downloadIndex.getDownloads().use { c -> while (c.moveToNext()) all += c.download }
           evictor.setPinned(all.map { it.request.customCacheKey ?: it.request.id })
           _downloads.value = all.mapNotNull { it.toTrackDownload() }.associateBy { it.track.id }
+          _downloads.value.keys.filterNot(loudness::isKnown).chunked(100).forEach(loudness::request)
           Timber.d("downloads: %d, cache %s", all.size, evictor.usage())
           trim()
         }

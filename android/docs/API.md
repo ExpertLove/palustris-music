@@ -4,6 +4,11 @@ Base URL: `https://music.palustris.ru`. Auth: `Authorization: Bearer <token>` (t
 
 **`/api/stream/{id}?q=o64|o96`** — compact Opus copy (Ogg) for downloads: ffmpeg transcodes the cached original once, then it is served as a file with `Content-Length` and Range. ~2× smaller than the AAC 128 original. First request for a track can take ~5–10 s. Query `a`/`t` (artist/title) let the server find a replacement if the video is gone.
 
+**`POST /api/loudness`** `{"ids": [...]}` (до 100) → `{"<id>": {"lufs": -8.8, "peak": 1.2}, …}` — громкость по EBU R128:
+интегральная (LUFS) и пиковая с учётом межсэмпловых выбросов (dBTP). Сервер считает её ffmpeg-ом после загрузки трека
+(около секунды на трек). Треков, которых ещё нет, в ответе нет: если файл уже в кэше, он встаёт в очередь на анализ,
+спросите снова через несколько секунд. Целевую громкость выбирает клиент (приложение: −14 LUFS).
+
 | Route | Methods → handler | Params | Returns | Doc |
 |---|---|---|---|---|
 | `/api/health` | GET `health` | `` | `&'static str` |  |
@@ -31,6 +36,7 @@ Base URL: `https://music.palustris.ru`. Auth: `Authorization: Bearer <token>` (t
 | `/api/top` | GET `top` | `h: HeaderMap, Query(q): Query<TopQ>` | `ApiResult<Vec<Track>>` |  |
 | `/api/stream/{id}` | GET `stream` | `Path(id): Path<String>, Query(q): Query<StreamQ>, req: Request` | `Response` |  |
 | `/api/prefetch` | POST `prefetch` | `h: HeaderMap, Json(b): Json<PrefetchBody>` | `ApiResult<()>` | Заранее качаем следующие треки очереди, чтобы они стартовали мгновенно. |
+| `/api/loudness` | POST `loudness_handler` | `h: HeaderMap, Json(b): Json<PrefetchBody>` | `ApiResult<HashMap<String, loudness::Loudness>>` | Громкость треков (LUFS и true peak) для выравнивания. Неизвестные в ответ не попадают. |
 | `/api/likes` | GET `likes` | `h: HeaderMap` | `ApiResult<Vec<Track>>` |  |
 | `/api/likes` | POST `like` | `h: HeaderMap, Json(t): Json<Track>` | `ApiResult<()>` |  |
 | `/api/likes/{id}` | DELETE `unlike` | `h: HeaderMap, Path(id): Path<String>` | `ApiResult<()>` |  |

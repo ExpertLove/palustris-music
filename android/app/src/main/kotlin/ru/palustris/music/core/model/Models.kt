@@ -69,6 +69,9 @@ data class Me(
 
 @Serializable data class IdsBody(val ids: List<String>)
 
+/** Громкость трека по EBU R128: интегральная (LUFS) и пиковая (dBTP). */
+@Serializable data class Loudness(val lufs: Float, val peak: Float)
+
 @Serializable
 data class Lyrics(
   val synced: String? = null,

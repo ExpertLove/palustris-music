@@ -32,10 +32,15 @@ data class Settings(
   val cacheLimitMb: Int = DEFAULT_CACHE_MB,
   val quality: DownloadQuality = DownloadQuality.Compact,
   val wifiOnly: Boolean = false,
+  /** Выравнивание громкости треков. */
+  val normalize: Boolean = true,
+  /** Плавный переход между треками, секунды; 0 — выключен. */
+  val crossfadeSec: Int = 0,
 ) {
   companion object {
     const val DEFAULT_CACHE_MB = 256
     val CACHE_OPTIONS_MB = listOf(128, 256, 512, 1024, 2048)
+    val CROSSFADE_OPTIONS_SEC = listOf(0, 3, 6, 9, 12)
   }
 }
 
@@ -46,6 +51,8 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   private val cacheKey = intPreferencesKey("cache_limit_mb")
   private val qualityKey = stringPreferencesKey("download_quality")
   private val wifiKey = booleanPreferencesKey("wifi_only")
+  private val normalizeKey = booleanPreferencesKey("normalize")
+  private val crossfadeKey = intPreferencesKey("crossfade_sec")
 
   /** `null`, пока DataStore не прочитан: кэш не должен чистить себя по лимиту по умолчанию. */
   val settings: StateFlow<Settings?> =
@@ -55,6 +62,8 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
           cacheLimitMb = p[cacheKey] ?: Settings.DEFAULT_CACHE_MB,
           quality = DownloadQuality.entries.firstOrNull { it.name == p[qualityKey] } ?: DownloadQuality.Compact,
           wifiOnly = p[wifiKey] ?: false,
+          normalize = p[normalizeKey] ?: true,
+          crossfadeSec = (p[crossfadeKey] ?: 0).coerceIn(0, Settings.CROSSFADE_OPTIONS_SEC.max()),
         )
       }
       .stateIn(scope, SharingStarted.Eagerly, null)
@@ -67,4 +76,8 @@ constructor(@ApplicationContext private val context: Context, @AppScope scope: C
   suspend fun setQuality(q: DownloadQuality) = context.settingsStore.edit { it[qualityKey] = q.name }
 
   suspend fun setWifiOnly(on: Boolean) = context.settingsStore.edit { it[wifiKey] = on }
+
+  suspend fun setNormalize(on: Boolean) = context.settingsStore.edit { it[normalizeKey] = on }
+
+  suspend fun setCrossfade(sec: Int) = context.settingsStore.edit { it[crossfadeKey] = sec }
 }

@@ -52,6 +52,10 @@ constructor(private val store: SettingsStore, private val storage: AudioStorage,
 
   fun setWifiOnly(on: Boolean) = viewModelScope.launch { store.setWifiOnly(on) }
 
+  fun setNormalize(on: Boolean) = viewModelScope.launch { store.setNormalize(on) }
+
+  fun setCrossfade(sec: Int) = viewModelScope.launch { store.setCrossfade(sec) }
+
   fun clearCache() =
     viewModelScope.launch {
       storage.clearListeningCache()

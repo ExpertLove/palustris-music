@@ -85,6 +85,8 @@ ru.palustris.music
 │          PlayerConnection (MediaController → StateFlow<PlayerState> for UI), QueueStore (filesDir/queue.json),
 │          SleepTimer (fade over 10 s via player.volume, or pauseAtEndOfMediaItems),
 │          AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
+│   audio/ LoudnessProcessor → (eq) → CrossfadeProcessor: the sink's processor chain; StreamInfo (which track a
+│          `flush(StreamMetadata)` belongs to), LoudnessStore (+ LoudnessMath, cache in filesDir/loudness.json)
 │   eq/    EqMath (bands/formulas = website), EqualizerProcessor (BaseAudioProcessor, PCM16), EqualizerStore (DataStore)
 └─ ui/     MusicRoot (theme from artwork, Nav3, mini/full player, snackbars, Navigator, add-to-playlist sheet),
            MainViewModel (TrackActions, PlayerControls), auth/ home/ search/ library/ settings/ player/ (FullPlayer,
@@ -134,14 +136,52 @@ Also verified (0.2.0):
 - history tab;
 - sleep timer «когда закончится трек» pauses exactly at the end.
 
+Also verified (0.3.0), with PCM dumps of the sink output:
+- crossfade AAC → AAC: 6 s tail held, mixed into the next track; no click at the junction, no level dip;
+  the new track's position starts at the start of the blend (lyrics stay in sync);
+- crossfade AAC 44.1 kHz → downloaded Opus 48 kHz (format change, AudioTrack recreated): tail resampled and mixed;
+- sleep timer «когда закончится трек» with crossfade on: no blend, the track plays to its end and pauses;
+- release build (R8): crossfade and playback.
+
 Unit tests: PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
-wrap on overload), LRC parser.
+wrap on overload), LRC parser, CrossfadeProcessor (8: blend shape, plan revoked → tail played out, seek and skip
+cancel, double flush at the boundary, sample-rate change, last track not cut), Loudness (4: gain math, per-track
+gain and ramp).
+
+### Audio chain: loudness and crossfade (how it works)
+
+`DefaultAudioSink` runs `LoudnessProcessor → EqualizerProcessor → CrossfadeProcessor` (+ `TeeAudioProcessor` in
+debug when `files/pcm_dump` exists: `adb shell run-as ru.palustris.music.debug touch files/pcm_dump`, restart the
+app, WAVs appear in `files/pcm/`). Everything rides on Media3 1.11 `AudioProcessor.flush(StreamMetadata)`: before
+each new stream (next item, seek) processors get the timeline and period uid, so they know the track exactly.
+
+- **Loudness.** The server measures EBU R128 (LUFS, true peak) after each download; `LoudnessStore` asks
+  `POST /api/loudness` for the current and next 3 tracks (on transitions and every 4 s, with backoff), caches to
+  `filesDir/loudness.json` (downloads are requested at download time, so they work offline). Gain: target −14 LUFS;
+  boost ≤ +6 dB and only while the true peak stays ≤ −1 dBTP; unknown → −5 dB (typical master ≈ −9 LUFS).
+  The gain switches exactly at the track boundary; a value that arrives mid-track ramps in over 1 s.
+- **Crossfade, one player.** About `fade + 1 s` before the end the processor starts holding the last `fade` ms in a
+  ring buffer (older frames go out as usual). On end of stream it keeps the tail; at the next stream's flush it mixes
+  the tail into the new start with equal-power curves (old cos, new sin), resampling if the rate changed. Media3
+  anchors the next item's start to the frames written, so the item transition and the position are right.
+  No second ExoPlayer, no MediaSession swap, no audio-focus juggling.
+- **Who decides.** `PlaybackService.planCrossfade` runs every 250 ms on the main thread and publishes a volatile
+  `CrossfadePlan(fromMediaId, fadeMs, allowed)`. Not allowed: track < max(20 s, 3 × fade), no next item or the same
+  id, repeat one, «stop at end of track» (`pauseAtEndOfMediaItems`), next item not buffered ≥ 2 s. If the plan is
+  revoked before the end, the held tail is played out unchanged — nothing is lost.
+- **Sink quirks the processor relies on (seen on the emulator, covered by tests).** At a gapless boundary the sink
+  drains, flushes with the new stream, then drains and flushes the same stream again to sync time: a flush of the
+  same period with no frames in between is a no-op. On a format change it first flushes with the *old* period
+  (or none) while the old AudioTrack plays out: that flush is intermediate and keeps the tail. A held tail older
+  than 3 s is dropped. Any other flush during capture or mixing (seek, manual skip) cancels the blend.
+- `EqualizerProcessor` applies the format in `onFlush`, not `onConfigure`: configure for the next track arrives while
+  the current one is still playing.
 
 ### Known gaps / next steps
 
 - Playlist reorder is up/down from the track menu, not drag and drop.
 - Sharing playlists (`/api/playlists/{id}/share`).
-- Crossfade and loudness normalization.
+- Crossfade: optional «no blend inside an album» rule; crossfade for repeat-one.
 - Offline copies of likes and playlists (needs Room).
 - Android Auto (MediaLibraryService).
 - Glance widget.
@@ -152,7 +192,7 @@ wrap on overload), LRC parser.
 
 Login/registration/password reset · «Моя волна» · search (tracks/artists/albums) · artist/album pages ·
 likes · playlists (create/rename/reorder/share) · history · synced lyrics · queue (play next, reorder) ·
-shuffle/repeat · **equalizer with presets** (must have) · sleep timer · crossfade/normalization ·
+shuffle/repeat · **equalizer with presets** (must have) · sleep timer · crossfade (0–12 s) · loudness normalization ·
 background playback, notification, lock screen, headset buttons · offline cache · home-screen widget (Glance) ·
 Android Auto (later).
 

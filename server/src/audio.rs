@@ -73,6 +73,8 @@ pub struct Audio {
     /// `--extractor-args` для попыток с аккаунтом (MUSIC_ACCOUNT_CLIENTS), по умолчанию — выбор yt-dlp.
     account_clients: Option<String>,
     jobs: Mutex<HashMap<String, Arc<Job>>>,
+    /// Вызывается, когда трек целиком скачан (например, чтобы посчитать громкость).
+    pub on_ready: std::sync::OnceLock<Box<dyn Fn(&str, &Path) + Send + Sync>>,
     play_slots: Semaphore,
     prefetch_slots: Semaphore,
 }
@@ -108,6 +110,7 @@ impl Audio {
             accounts,
             account_clients,
             jobs: Mutex::new(HashMap::new()),
+            on_ready: std::sync::OnceLock::new(),
             play_slots: Semaphore::new(3),
             prefetch_slots: Semaphore::new(1),
         })
@@ -142,6 +145,9 @@ impl Audio {
         let j = job.clone();
         tokio::spawn(async move {
             let res = me.run(&id, &j, prefetch).await;
+            if let (Ok(path), Some(hook)) = (&res, me.on_ready.get()) {
+                hook(&id, path);
+            }
             j.update(|s| s.done = Some(res.map_err(|e| e.to_string())));
             if let Ok(mut m) = me.jobs.lock() {
                 m.remove(&id);
