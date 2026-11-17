@@ -664,6 +664,8 @@ async fn yt_collection(State(st): St, h: HeaderMap, Path(id): Path<String>) -> A
 struct SearchQ {
     q: Option<String>,
     region: Option<String>,
+    /// `songs` — только песни (с длительностью), без клипов и подборок.
+    kind: Option<String>,
 }
 
 async fn search(State(st): St, h: HeaderMap, Query(sq): Query<SearchQ>) -> ApiResult<Vec<Track>> {
@@ -677,6 +679,9 @@ async fn search(State(st): St, h: HeaderMap, Query(sq): Query<SearchQ>) -> ApiRe
             v = yt::chart_top(&st.http, "").await.unwrap_or_default();
         }
         return Ok(Json(v));
+    }
+    if sq.kind.as_deref() == Some("songs") && q.len() <= 200 {
+        return Ok(Json(st.cache.songs(&st.http, q).await));
     }
     Ok(Json(st.cache.search(&st.http, q).await))
 }

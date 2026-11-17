@@ -598,7 +598,7 @@ pub async fn wave(
     if mood_on {
         let genre = p.genres.first().map(String::as_str);
         let queries = mood_queries(params.mood.as_deref(), params.activity.as_deref(), p.russian_share() > 0.5, genre);
-        let found = join_all(queries.iter().map(|(q, _)| cache.search(http, q))).await;
+        let found = join_all(queries.iter().map(|(q, _)| cache.songs(http, q))).await;
         for ((_, why), tracks) in queries.iter().zip(found) {
             let why = format!("Под настроение «{why}»");
             let good: Vec<Track> = tracks.into_iter().filter(|t| acceptable(&p, t)).take(20).collect();
@@ -680,7 +680,7 @@ pub async fn wave(
     // 6. Холодный старт: ни лайков, ни истории.
     if p.is_empty() && !mood_on {
         for g in p.genres.iter().take(4) {
-            let tracks = cache.search(http, &genre_query(g)).await;
+            let tracks = cache.songs(http, &genre_query(g)).await;
             let why = format!("Твой жанр: {}", genre_title(g));
             for (i, t) in tracks.iter().filter(|t| acceptable(&p, t)).enumerate().take(10) {
                 pool.add(t, VideoKind::Song, 0.6 / (1.0 + i as f64 / 5.0), &why);
@@ -742,7 +742,7 @@ pub async fn wave(
                     continue;
                 }
                 s *= 1.2;
-                why = format!("Новое для тебя, {}", c.like);
+                why = format!("Новое для тебя, {}", lower_first(&c.like));
             }
             Mode::Popular => {
                 s *= 1.0 + 0.3 * taste.max(0.0);
@@ -775,6 +775,15 @@ pub async fn wave(
         out.extend(fallback(&p, cache, http, chart, &out).await);
     }
     out
+}
+
+/// «Под настроение …» → «под настроение …»: объяснение идёт после запятой.
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Не больше `max` треков с одним объяснением; лишние уходят в конец (на случай нехватки).
@@ -813,7 +822,7 @@ async fn fallback(p: &Profile, cache: &SearchCache, http: &reqwest::Client, char
     let mut out: Vec<(f64, Track, String)> = Vec::new();
     for (a, w) in p.top_artists(5) {
         let name = p.display_name(&a);
-        for t in cache.search(http, &name).await {
+        for t in cache.songs(http, &name).await {
             if keys_of(&t.artist).contains(&a) && acceptable(p, &t) && !p.heard_song(&t) && seen.insert(t.id.clone()) {
                 out.push((w + rand::random::<f64>() * 0.2, t, format!("Ты часто слушаешь {name}")));
             }
@@ -839,7 +848,7 @@ pub async fn recommend(db: &Mutex<rusqlite::Connection>, cache: &SearchCache, ht
         let mut out: Vec<(f64, Track)> = Vec::new();
         let mut seen = HashSet::new();
         for (i, g) in p.genres.iter().enumerate() {
-            for t in cache.search(http, &genre_query(g)).await {
+            for t in cache.songs(http, &genre_query(g)).await {
                 if acceptable(&p, &t) && seen.insert(t.id.clone()) {
                     out.push((0.6 - i as f64 * 0.03 + rng.gen::<f64>() * 0.25, t));
                 }
@@ -1274,7 +1283,18 @@ fn is_junk(title: &str) -> bool {
         "музыка для",
         "фоновая музыка",
     ];
+    // «𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭»: стилизованные буквы Unicode — примета каналов-подборок, а не песен.
+    if title.chars().any(|c| ('\u{1D400}'..='\u{1D7FF}').contains(&c)) {
+        return true;
+    }
+    // Названия песен длиннее 90 знаков — почти всегда описание подборки.
+    if title.chars().count() > 90 {
+        return true;
+    }
     let t = title.to_lowercase();
+    if t.contains("vol.") && (t.contains("music") || t.contains("songs") || t.contains("mix")) {
+        return true;
+    }
     if t.matches(',').count() >= 3 {
         return true; // «Шадэ, Jony, Мальборо, Zivert» — это канал, а не песня
     }
@@ -1395,6 +1415,9 @@ mod tests {
         assert!(is_junk("ADHD Focus Music — Upbeat Deep Work Beats for Productivity"));
         assert!(is_junk("Deep Focus - Music For Studying, Concentration and Work"));
         assert!(!is_junk("Focus"));
+        assert!(is_junk("【𝐏𝐥𝐚𝐲𝐥𝐢𝐬𝐭】R&B Relax Deep Soul✨Late Night Music"));
+        assert!(is_junk("R&B Soul Jazz _ Smooth & Relaxing Songs for a Cozy Mood, Vol. 02"));
+        assert!(!is_junk("Akhiyaan Gulaab (From \"Teri Baaton Mein Aisa Uljha Jiya\")"));
     }
 
     #[test]

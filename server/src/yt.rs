@@ -43,6 +43,8 @@ pub struct SearchCache {
     collections: Cache<Collection>,
     /// Радио по треку меняется медленно: сутки в кэше, иначе каждая волна дёргала бы YouTube.
     radios: Cache<Vec<RadioItem>>,
+    /// Поиск только по песням (фильтр «Композиции»).
+    songs: Cache<Vec<Track>>,
 }
 
 impl Default for SearchCache {
@@ -53,6 +55,7 @@ impl Default for SearchCache {
             artists: Cache::new(Duration::from_secs(6 * 3600)),
             collections: Cache::new(Duration::from_secs(6 * 3600)),
             radios: Cache::new(Duration::from_secs(24 * 3600)),
+            songs: Cache::new(TTL),
         }
     }
 }
@@ -99,6 +102,25 @@ impl SearchCache {
         let v = collection(http, id).await?;
         self.collections.put(id, v.clone());
         Ok(v)
+    }
+
+    /// Только песни: с длительностью, без клипов, подкастов и плейлистов. Для подборок по
+    /// настроению: в обычном поиске YouTube Music больше не отдаёт длительность, и часовые
+    /// «музыка для сна» было не отличить от песни.
+    pub async fn songs(&self, http: &Client, q: &str) -> Vec<Track> {
+        let key = q.to_lowercase();
+        if let Some(v) = self.songs.get(&key) {
+            return v;
+        }
+        match search_songs(http, q).await {
+            Ok(v) if !v.is_empty() => {
+                self.songs.put(&key, v.clone());
+                v
+            }
+            Ok(_) => Vec::new(),
+            // Фильтр мог перестать работать — тогда обычный поиск, лишь бы что-то было.
+            Err(_) => self.search(http, q).await,
+        }
     }
 
     /// Радио YouTube Music от трека (или от исполнителя, если передан `playlist` вида RDEM…).
@@ -563,6 +585,22 @@ fn album_from_runs(id: String, title: String, sub: &[(String, Option<String>)], 
         .collect::<Vec<_>>()
         .join(" · ");
     AlbumCard { id, title, artist, sub, thumb, kind }
+}
+
+/// Фильтр поиска «Композиции» в YouTube Music.
+const SONGS_FILTER: &str = "EgWKAQIIAWoMEA4QChADEAQQCRAF";
+
+pub async fn search_songs(http: &Client, q: &str) -> Result<Vec<Track>> {
+    let v = ytm(http, "search", json!({ "query": q, "params": SONGS_FILTER })).await?;
+    let mut items = Vec::new();
+    collect(&v, "musicResponsiveListItemRenderer", &mut items);
+    let mut seen = std::collections::HashSet::new();
+    Ok(items
+        .into_iter()
+        .filter(|it| parse_card(it).is_none())
+        .filter_map(|it| parse_track(it, None))
+        .filter(|t| seen.insert(t.id.clone()))
+        .collect())
 }
 
 pub async fn search_all(http: &Client, q: &str) -> Result<SearchAll> {
