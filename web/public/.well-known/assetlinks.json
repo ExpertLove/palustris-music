@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ru.palustris.music",
+      "sha256_cert_fingerprints": [
+        "B1:77:ED:36:0F:45:FF:1B:82:C9:24:D4:43:A6:35:0A:DE:F6:D6:4A:8E:69:B9:DF:A6:7C:29:94:D1:E0:75:74"
+      ]
+    }
+  }
+]
