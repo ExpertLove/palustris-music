@@ -21,7 +21,8 @@
 | **Инфраструктура** `ops/` | Caddy · systemd · cron · Docker (PO-токены) | Ubuntu 26.04, `music.palustris.ru` |
 
 Музыку сервер берёт из YouTube через **yt-dlp**, метаданные — из внутреннего API YouTube Music, тексты — из LRCLIB.
-Своих треков у сервиса нет.
+Если YouTube трек не отдал, сервер ищет ту же запись исполнителя в Audius, SoundCloud и archive.org и честно это
+показывает («Версия с SoundCloud»). Своих треков у сервиса нет.
 
 ## Возможности
 
@@ -76,7 +77,8 @@ cd server && cargo test
 ```
 server/          бэкенд (Rust)
   src/main.rs      API, сессии, пароли, плейлисты, история
-  src/audio.rs     yt-dlp → кэш, отдача трека во время загрузки, предзагрузка, очистка кэша
+  src/audio.rs     yt-dlp → кэш, отдача трека во время загрузки, предзагрузка, очистка кэша, блок YouTube
+  src/sources.rs   запасные источники звука: Audius, SoundCloud, archive.org
   src/accounts.rs  аккаунты YouTube: ротация, паузы, журнал загрузок
   src/admin.rs     API админки
   src/yt.rs        YouTube Music: поиск, исполнители, альбомы, чарты
