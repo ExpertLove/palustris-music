@@ -90,15 +90,17 @@ rules break only in release. Glance 1.2.0 drags in WorkManager 2.7.1 (Room 2.2.5
 ru.palustris.music
 ├─ core/   AppModule (OkHttp + auth interceptor, Retrofit, Json, @AppScope), net/ (MusicApi, apiCall → Russian error text),
 │          model/ (Track, Me, Playlist…), prefs/ (SessionStore: token; SettingsStore: cache limit, quality, Wi-Fi only,
-│          normalize, crossfade, chart region)
+│          normalize, crossfade, chart region, playback speed)
 ├─ data/   OfflineFiles (JSON in filesDir/offline, AtomicFile), Outbox (queue of edits for the server),
 │          AccountRepository (profile, password, devices, delete), LibraryRepository (likes, offline),
-│          PlaylistsRepository (list + content offline, edits via Outbox, share links, shared playlists)
+│          PlaylistsRepository (list + content offline, edits via Outbox, share links, shared playlists),
+│          HistoryRepository (history offline copy, clear on the server → `cleared` event for home)
 ├─ media/  PlaybackService (MediaLibraryService + ExoPlayer: background, notification, headset keys,
 │          history via Outbox / skips, server prefetch, endless «Моя волна», skip on error,
 │          queue persistence + onPlaybackResumption, EQ in the audio sink, Android Auto catalog),
 │          LibraryTree (catalog for Android Auto), ArtworkProvider (content:// artwork for the car),
-│          PlayerConnection (MediaController → StateFlow<PlayerState> for UI), QueueStore (filesDir/queue.json),
+│          PlayerConnection (MediaController → StateFlow<PlayerState> for UI, incl. `upNext` in play order;
+│          move/remove/clear-up-next), QueueStore (filesDir/queue.json),
 │          SleepTimer, AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
 │   audio/ LoudnessProcessor → (eq) → CrossfadeProcessor, StreamInfo, LoudnessStore (+ LoudnessMath)
 │   eq/    EqMath (bands/formulas = website), EqualizerProcessor (BaseAudioProcessor, PCM16), EqualizerStore (DataStore)
@@ -107,7 +109,9 @@ ru.palustris.music
 └─ ui/     MusicRoot (theme from artwork, Nav3, mini/full player, snackbars, Navigator, add-to-playlist sheet, status bar scrim),
            MainViewModel (TrackActions, PlayerControls, sign out / account deleted, incoming links), home/ (new home),
            account/ (profile screen, genres, Avatar), moods/ (20 moods, cards, mood and all-moods screens), chart/ (regions),
-           auth/ search/ (moods grid when idle) library/ settings/ player/ catalog/ playlists/ (drag, share, shared)
+           auth/ (two steps: form, then genres) search/ (moods grid when idle) library/ (likes, playlists, artists,
+           downloads, history + clear) settings/ player/ (FullPlayer, QueueSheet, speed sheet) catalog/
+           playlists/ (drag, share, shared)
            equalizer/ common/ (Components, Collections, Groups) theme/
 ```
 
@@ -178,12 +182,24 @@ Also verified (0.4.0), debug and release (R8):
 - account deletion on a throwaway account: confirm by email → server 401 for that login, login screen, offline data and
   downloads wiped; then logging in to another account in the same process shows only that account's data.
 
-Unit tests (38): PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
-wrap on overload), LRC parser, CrossfadeProcessor (8: blend shape, plan revoked → tail played out, seek and skip
-cancel, double flush at the boundary, sample-rate change, last track not cut), Loudness (4: gain math, per-track
-gain and ramp), OfflineSync (9: outbox compaction, in-flight op, JSON round trip, pending likes and playlist edits over
-the server answer, reorder, row covers), UiLogic (6: initials, mood interleave, moods by hour, queries, region,
-car item ids). Instrumented: LibraryBrowseTest.
+Also verified (0.5.0), debug and release (R8):
+- speed: settings chip → `dumpsys media_session` speed=1.25; top-bar badge and speed sheet in the full player;
+  speed change during capture and during the blend (log, see above); release: 1.25 and back to 1.0;
+- queue: drag (order checked in `queue.json` in debug and by actual playback order with media NEXT in release), remove,
+  tap to play, «Очистить» in «Моя волна» → «Дальше ничего нет» → refilled with 21 tracks; shuffle on: hint, no handles,
+  NEXT plays the first «Далее» item;
+- artists grid → artist page; history «Очистить» on a throwaway account: confirm → «История очищена», pull to refresh
+  stays empty (server), home «Недавно играло» gone;
+- sign-up with 3 genres → profile shows them and «Моя волна» says «Твой жанр: Инди»; Back on step 2 keeps the form;
+  the throwaway account was deleted through the app (server answers 401 for it).
+
+Unit tests (45): PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
+wrap on overload), LRC parser, CrossfadeProcessor (10: blend shape, plan revoked → tail played out, seek and skip
+cancel, double flush at the boundary, sample-rate change, last track not cut, speed change during capture and during
+the blend), Loudness (4: gain math, per-track gain and ramp), OfflineSync (9: outbox compaction, in-flight op, JSON
+round trip, pending likes and playlist edits over the server answer, reorder, row covers), UiLogic (11: initials, mood
+interleave, moods by hour, queries, region, car item ids, queue keys, up-next ranges, speed labels, list length,
+sign-up form errors). Instrumented: LibraryBrowseTest.
 
 ### Audio chain: loudness and crossfade (how it works)
 
@@ -213,6 +229,32 @@ each new stream (next item, seek) processors get the timeline and period uid, so
   than 3 s is dropped. Any other flush during capture or mixing (seek, manual skip) cancels the blend.
 - `EqualizerProcessor` applies the format in `onFlush`, not `onConfigure`: configure for the next track arrives while
   the current one is still playing.
+
+### Parity with the website (0.5.0)
+
+- **Speed** 0.75/1/1.25/1.5× (as on the site), `SettingsStore.speedPercent`; `PlaybackService.applySpeed` calls
+  `setPlaybackSpeed` (pitch kept: Sonic runs after our processors, so the crossfade is in media time: 6 s at 1.5× sounds 4 s).
+  Settings → «Звук» has the chips; the full player shows «1,25×» in the top bar only when the speed is not 1×.
+- **Speed change vs crossfade (bug found while adding speed).** `DefaultAudioSink` applies new playback parameters by
+  draining the processors (`queueEndOfStream`) and flushing them with the *same* period at the current position.
+  During capture the crossfade processor took that drain for the end of the track and kept the tail; the real end later
+  overwrote it, dropping up to `fade` seconds of audio. `continuesCurrent()`: a flush of the same period whose
+  position equals `startUs + framesIn/rate` (±150 ms) changes nothing, and a tail that the drain set aside goes back
+  into the ring. Seeks are not affected: their first flush has position 0. Verified on the emulator by log
+  («end of X: tail 2878ms» → «continues at 210545ms» → «end of X: tail 6000ms, crossfade»).
+- **Queue sheet** (`ui/player/QueueSheet.kt`): now playing, «Далее» in play order (`PlayerState.upNext`, built from the
+  timeline with the shuffle flag), drag by handle (Reorderable, keys `q:{id}#{n}` so duplicates and moves keep keys),
+  remove (×), tap to play, «Очистить» (removes the up-next indices in contiguous ranges, back to front). With shuffle
+  on there are no handles: Media3's shuffle order would make a move meaningless. TalkBack gets «Выше/Ниже» custom actions.
+  `moveInQueue/removeFromQueue` check the media id at the index, so a stale index (track changed mid-drag) is ignored.
+  «Моя волна» refills itself after removals/clear: `Reporter.onTimelineChanged(PLAYLIST_CHANGED)` → `extendWave()`.
+- **Library:** tab «Исполнители» (`GET /api/artists`: from likes + history, `artists.json` offline copy, 3-column grid,
+  tap → artist page by the first name before a comma, like the site); History tab «Очистить» with a confirm dialog
+  (`DELETE /api/history`, also drops pending `Listened` ops from the Outbox; needs the network; home's «Недавно играло»
+  empties through `HistoryRepository.cleared`).
+- **Sign-up in two steps** like the site: email/name/password/consent → genres (`GenreChips`, shared with the profile,
+  ≤ 8, skippable). An error about email/password/consent (`isFormError`) returns to step 1; system Back on step 2 too.
+- Not ported on purpose: admin panel, keyboard shortcuts, the full-screen visualizer.
 
 ### Offline: likes, playlists, profile, home (0.4.0)
 
@@ -278,7 +320,8 @@ each new stream (next item, seek) processors get the timeline and period uid, so
 
 Login/registration/password reset · account settings · «Моя волна» · home with recommendations · moods · charts by
 country · search (tracks/artists/albums) · artist/album pages · likes · playlists (create/rename/drag/share/open links) ·
-history · synced lyrics · queue (play next, reorder) · shuffle/repeat · **equalizer with presets** (must have) ·
+history (clear) · artists in the library · genres at sign-up · synced lyrics · queue (play next, drag, remove, clear) ·
+playback speed · shuffle/repeat · **equalizer with presets** (must have) ·
 sleep timer · crossfade (0–12 s) · loudness normalization · background playback, notification, lock screen, headset
 buttons · offline cache and offline library · home-screen widget (Glance) · Android Auto.
 
