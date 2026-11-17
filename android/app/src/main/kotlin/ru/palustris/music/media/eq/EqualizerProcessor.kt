@@ -89,7 +89,7 @@ class EqualizerProcessor(private val settings: () -> EqSnapshot) : BaseAudioProc
     output.flip()
   }
 
-  override fun onFlush() {
+  override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
     if (inputAudioFormat.sampleRate != sampleRate || inputAudioFormat.channelCount != channels) {
       sampleRate = inputAudioFormat.sampleRate
       channels = inputAudioFormat.channelCount

@@ -237,7 +237,7 @@ class PlaybackService : MediaLibraryService() {
   private inner class Callback : MediaLibrarySession.Callback {
     override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
       val trusted = controller.packageName == packageName || controller.isTrusted || controller.packageName in LIBRARY_CLIENTS
-      return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+      return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
         .setAvailableSessionCommands(
           if (trusted) MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
           else MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
@@ -287,13 +287,15 @@ class PlaybackService : MediaLibraryService() {
     override fun onPlaybackResumption(
       mediaSession: MediaSession,
       controller: MediaSession.ControllerInfo,
-    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-      val q = runBlocking { withTimeoutOrNull(2_000) { queueStore.load() } }
-        ?: return Futures.immediateFailedFuture(UnsupportedOperationException("нет сохранённой очереди"))
-      return Futures.immediateFuture(
-        MediaSession.MediaItemsWithStartPosition(with(queueStore) { q.toMediaItems() }, q.index, q.positionMs)
-      )
-    }
+      isForPlayback: Boolean,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+      scope.future {
+        val q = withTimeoutOrNull(2_000) { queueStore.load() } ?: throw UnsupportedOperationException("нет сохранённой очереди")
+        val items = with(queueStore) { q.toMediaItems() }
+        // Системе для карточки «продолжить» (например, после перезагрузки) нужен только текущий трек.
+        if (isForPlayback) MediaSession.MediaItemsWithStartPosition(items, q.index, q.positionMs)
+        else MediaSession.MediaItemsWithStartPosition(listOf(items[q.index]), 0, q.positionMs)
+      }
 
     override fun onGetLibraryRoot(
       session: MediaLibrarySession,

@@ -67,6 +67,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -379,19 +380,21 @@ private fun SeekBar(progress: State<Progress>, durationHint: Long, onSeek: (Long
   val p = progress.value
   val duration = if (p.durationMs > 0) p.durationMs else durationHint
   var dragging by remember { mutableStateOf(false) }
-  var dragValue by remember { mutableFloatStateOf(0f) }
+  val slider = remember { SliderState(0f) }
   val fraction = if (duration > 0) (p.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f
-  val shown = if (dragging) dragValue else fraction
+  // Пока палец не держит ползунок, он идёт за воспроизведением.
+  LaunchedEffect(fraction, dragging) { if (!dragging) slider.value = fraction }
+  val shown = if (dragging) slider.value else fraction
 
   Column(Modifier.fillMaxWidth()) {
     Slider(
-      value = shown,
+      state = slider,
       onValueChange = {
         dragging = true
-        dragValue = it
+        slider.value = it
       },
       onValueChangeFinished = {
-        onSeek((dragValue * duration).toLong())
+        onSeek((slider.value * duration).toLong())
         dragging = false
       },
       enabled = duration > 0,
