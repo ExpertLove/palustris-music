@@ -249,6 +249,16 @@
 .np-info .a { font-size: 17px; color: var(--ink-2); font-weight: 550; }
 .np-info .a:hover { color: var(--ink); }
 .np-info .why { font-size: 13px; color: var(--accent); margin-top: 4px; }
+
+/* YouTube не отдал трек: играет такая же запись из другого каталога. */
+.sub-note { display: block; width: fit-content; max-width: 100%; color: var(--ink-2); text-decoration: none; }
+.sub-note::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--warn); margin-right: 6px; vertical-align: 2px;
+}
+.sub-note:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.sub-note.sm { font-size: 12px; }
+.sub-note.lg { font-size: 13px; margin-top: 4px; }
 .np-acts { display: flex; align-items: center; gap: 2px; }
 .icon-btn.dislike.on { color: var(--ink); }
 .np-seek { width: min(100%, 520px); display: grid; gap: 4px; }

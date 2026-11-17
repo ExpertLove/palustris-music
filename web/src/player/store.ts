@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { api } from '../lib/api'
 import { EQ_PRESETS, getRegion, loadWaveSettings, saveWaveSettings } from '../lib/data'
 import { bigThumb, shuffled } from '../lib/format'
-import type { Track, WaveSettings } from '../lib/types'
+import type { Substitute, Track, WaveSettings } from '../lib/types'
 import { toast } from '../store/ui'
 import { engine, isIOS } from './engine'
 import { levelOf, requestLoudness } from './loudness'
@@ -65,6 +65,8 @@ interface PlayerState {
   unshuffled: Track[] | null
   /** Настройки «Моей волны»: характер, настроение, занятие. */
   waveSettings: WaveSettings
+  /** YouTube не отдал трек `id`, играет такая же запись из другого каталога. */
+  substitute: (Substitute & { id: string }) | null
 
   playList: (list: Track[], start?: number, source?: Source) => void
   playTrack: (t: Track, list?: Track[], source?: Source) => void
@@ -117,6 +119,23 @@ let refilling = false
 let lastExtend = 0
 let errorsInRow = 0
 let prefetchedFor = ''
+/** Когда последний раз спрашивали про замену: `playing` приходит и после паузы, и после перемотки. */
+let substituteAsked = { id: '', at: 0 }
+
+/** У `<audio>` нет доступа к заголовкам ответа, поэтому о подмене спрашиваем сервер отдельно. */
+function askSubstitute(t: Track) {
+  const now = Date.now()
+  if (substituteAsked.id === t.id && now - substituteAsked.at < 60_000) return
+  substituteAsked = { id: t.id, at: now }
+  api
+    .substitute(t.id)
+    .then((sub) => {
+      const cur = usePlayer.getState()
+      if (cur.queue[cur.index]?.id !== t.id) return
+      usePlayer.setState({ substitute: sub ? { ...sub, id: t.id } : null })
+    })
+    .catch(() => null)
+}
 /** Пропуски подряд в волне: после двух она перестраивается, как в приложении. */
 let skipsInRow = 0
 
@@ -237,6 +256,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     sleepEndOfTrack: false,
     queued: 0,
     unshuffled: null,
+    substitute: null,
     waveSettings: loadWaveSettings(),
 
     playList: (list, start = 0, source) => {
@@ -587,7 +607,9 @@ engine.setHandlers({
   time: (t, d) => {
     const s = usePlayer.getState()
     const cur = current(s)
-    usePlayer.setState({ time: t, duration: Number.isFinite(d) && d > 0 ? d : s.duration })
+    // У mp3 из запасных источников браузер часто оценивает длину наугад (VBR без оглавления).
+    const sub = s.substitute && s.substitute.id === cur?.id && s.substitute.duration > 0 ? s.substitute.duration : 0
+    usePlayer.setState({ time: t, duration: sub || (Number.isFinite(d) && d > 0 ? d : s.duration) })
     if (!cur) return
     // Прослушивание: считаем только плавный ход вперёд, перемотка и паузы не в счёт.
     if (listen?.track.id !== cur.id) {
@@ -645,6 +667,7 @@ engine.setHandlers({
   started: (t) => {
     errorsInRow = 0
     askLoudness()
+    askSubstitute(t)
     if (prefetchedFor === t.id) return
     prefetchedFor = t.id
     const s = usePlayer.getState()

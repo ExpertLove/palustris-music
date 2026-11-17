@@ -11,6 +11,17 @@ export interface Track {
   why?: string
 }
 
+/** Та же запись из другого каталога, когда YouTube не отдал трек (см. server/src/sources.rs). */
+export interface Substitute {
+  source: 'audius' | 'soundcloud' | 'archive'
+  sourceName: string
+  title: string
+  artist: string
+  duration: number
+  /** Страница записи у источника. */
+  page: string
+}
+
 export interface HistItem extends Track {
   playedAt: number
   plays: number
@@ -214,6 +225,10 @@ export interface AdminOverview {
   now: number
   startedAt: number
   ipFlaggedUntil: number
+  /** YouTube блокирует сервер с этого момента: новые треки идут из запасных источников. */
+  ytBlockedSince: number | null
+  ytNextProbe: number | null
+  fallback: { hour: { ok: number; miss: number }; day: { ok: number; miss: number } }
   accounts: { total: number; available: number }
   hour: { ok: number; fail: number; attemptsFailed: number }
   day: { ok: number; fail: number; attemptsFailed: number }

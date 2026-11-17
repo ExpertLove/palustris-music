@@ -177,9 +177,19 @@ function Overview({ go }: { go: (t: Tab) => void }) {
   if (error && !o) return <p className="adm-error">{error}</p>
   if (!o) return <div className="adm-skel" />
   const flagged = o.ipFlaggedUntil > o.now
+  const blocked = o.ytBlockedSince != null
   const noAccounts = o.accounts.available === 0
   const failing = o.hour.fail > 0 && o.hour.ok === 0
-  const tone = flagged && noAccounts ? 'bad' : flagged || failing ? 'warn' : 'ok'
+  const fb = o.fallback.hour
+  const tone = blocked
+    ? fb.ok === 0 && fb.miss > 0
+      ? 'bad'
+      : 'warn'
+    : flagged && noAccounts
+      ? 'bad'
+      : flagged || failing
+        ? 'warn'
+        : 'ok'
   const cachePct = Math.min(100, Math.round((o.cache.bytes / Math.max(1, o.cache.maxBytes)) * 100))
   const diskPct = o.disk ? Math.round(((o.disk.size - o.disk.avail) / o.disk.size) * 100) : 0
 
@@ -191,14 +201,23 @@ function Overview({ go }: { go: (t: Tab) => void }) {
           <h2>
             {tone === 'ok'
               ? 'Загрузка треков работает'
-              : flagged && noAccounts
+              : blocked
+                ? 'YouTube блокирует сервер — новые треки ищем в запасных источниках'
+                : flagged && noAccounts
                 ? 'YouTube блокирует сервер, аккаунтов нет'
                 : flagged
                   ? 'YouTube блокирует IP — работаем через аккаунты'
                   : 'Есть ошибки загрузки'}
           </h2>
           <p>
-            {flagged ? (
+            {blocked ? (
+              <>
+                С {fmtClock(o.ytBlockedSince!)} YouTube просит подтвердить, что сервер не бот. На каждый трек его не дёргаем
+                {o.ytNextProbe ? `, следующая проверка — после ${fmtClock(o.ytNextProbe)}` : ''}. За час такая же запись
+                нашлась для {fb.ok} {plural(fb.ok, 'трека', 'треков', 'треков')}, не нашлась — для {fb.miss}. Уже скачанные треки играют
+                как обычно.
+              </>
+            ) : flagged ? (
               <>
                 Без аккаунта YouTube отвечает «подтвердите, что вы не бот». Следующая проверка без аккаунта после{' '}
                 {fmtClock(o.ipFlaggedUntil)}.{' '}
@@ -236,6 +255,12 @@ function Overview({ go }: { go: (t: Tab) => void }) {
           value={`${o.accounts.available} / ${o.accounts.total}`}
           sub="доступно сейчас"
           tone={o.accounts.total === 0 ? undefined : o.accounts.available === 0 ? 'bad' : undefined}
+        />
+        <Tile
+          label="Запасные источники за сутки"
+          value={o.fallback.day.ok}
+          sub={o.fallback.day.ok + o.fallback.day.miss === 0 ? 'не понадобились' : `такой же записи не нашлось: ${o.fallback.day.miss}`}
+          tone={o.fallback.day.miss > o.fallback.day.ok ? 'warn' : undefined}
         />
         <Tile label="Прослушиваний за сутки" value={o.playsDay} sub={`активных за неделю: ${o.activeUsers} из ${o.users}`} />
         <Tile
@@ -668,8 +693,14 @@ function CookiesDialog({
 
 // ───────── журнал загрузок ─────────
 
+const FALLBACK_NAMES: Record<string, string> = { audius: 'Audius', soundcloud: 'SoundCloud', archive: 'archive.org' }
+
 function clientLabel(e: DlEvent) {
   if (e.client === 'test') return `проверка · ${e.accountLabel ?? `#${e.account}`}`
+  if (e.client.startsWith('fallback')) {
+    const src = e.client.split(':')[1]
+    return src ? `запасной источник · ${FALLBACK_NAMES[src] ?? src}` : 'запасные источники'
+  }
   if (e.account != null) return e.accountLabel ?? `аккаунт #${e.account}`
   return `без аккаунта · ${e.client}`
 }

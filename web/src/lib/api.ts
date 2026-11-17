@@ -17,6 +17,7 @@ import type {
   SharedPlaylist,
   Stats,
   StatsPeriod,
+  Substitute,
   Track,
   WaveSettings,
   Wrapped,
@@ -120,6 +121,8 @@ export const api = {
   artistRadio: (p: { artistId?: string | null; artistName?: string }) => get<Track[]>(`/radio?${q(p)}`),
   mixes: () => get<Mixes>('/mixes'),
   dislikes: () => get<Dislikes>('/dislikes'),
+  /** Что играет вместо трека, если YouTube его не отдал (`null` — играет сам трек). */
+  substitute: (id: string) => get<Substitute | null>(`/substitute/${encodeURIComponent(id)}`),
   dislike: (t: Track) => post<null>('/dislikes', strip(t)),
   undislike: (id: string) => del<null>(`/dislikes/${encodeURIComponent(id)}`),
   blockArtist: (name: string) => post<null>('/blocked-artists', { name }),
@@ -191,4 +194,6 @@ function strip(t: Track): Track {
   }
 }
 
-export const streamUrl = (t: Track) => `/api/stream/${encodeURIComponent(t.id)}?${q({ a: t.artist, t: t.title })}`
+/** Исполнитель, название и длительность — чтобы сервер нашёл такую же запись, если YouTube не отдаст трек. */
+export const streamUrl = (t: Track) =>
+  `/api/stream/${encodeURIComponent(t.id)}?${q({ a: t.artist, t: t.title, d: t.duration > 0 ? Math.round(t.duration) : null })}`

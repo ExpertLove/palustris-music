@@ -68,6 +68,21 @@ function MuteButton() {
   )
 }
 
+/**
+ * YouTube не отдал трек, и сервер играет такую же запись из другого каталога. Говорим об этом прямо
+ * и даём ссылку на страницу записи: там автор и условия использования.
+ */
+function SubstituteNote({ id, className }: { id: string; className: string }) {
+  const sub = usePlayer((s) => (s.substitute?.id === id ? s.substitute : null))
+  if (!sub) return null
+  const hint = `YouTube сейчас не отдаёт этот трек, поэтому играет такая же запись с ${sub.sourceName}: «${sub.artist} — ${sub.title}». Нажми, чтобы открыть её страницу.`
+  return (
+    <a className={`sub-note ellipsis ${className}`} href={sub.page} target="_blank" rel="noopener noreferrer" title={hint} onClick={(e) => e.stopPropagation()}>
+      Версия с {sub.sourceName}
+    </a>
+  )
+}
+
 export function Dock() {
   const track = usePlayer((s) => current(s))
   const time = usePlayer((s) => s.time)
@@ -98,6 +113,7 @@ export function Dock() {
             <ArtistLinks track={track} stop={false} />
           </span>
           {track.why && recommended && <span className="why ellipsis">{track.why}</span>}
+          <SubstituteNote id={track.id} className="sm" />
         </div>
         {recommended && <DislikeButton track={track} size={18} className="sm" />}
         <LikeButton track={track} size={19} />
@@ -363,6 +379,7 @@ export function NowPlaying() {
                 <ArtistLinks track={track} stop={false} />
               </div>
               {track.why && recommended && <div className="why">{track.why}</div>}
+              <SubstituteNote id={track.id} className="lg" />
             </div>
             <div className="np-acts">
               {recommended && <DislikeButton track={track} size={22} />}
