@@ -31,6 +31,9 @@ timber = "5.0.1"
 # UI extras
 reorderable = "3.1.0"
 glance = "1.2.0"
+# Glance тянет WorkManager 2.7.1 (Room 2.2.5), чьи правила R8 в строгом режиме AGP 9 не сохраняют
+# конструктор WorkDatabase_Impl: релиз падал на старте. Берём актуальный WorkManager явно.
+work = "2.12.0"
 # Tests
 androidxTest = "1.7.0"
 androidxTestExt = "1.3.0"
@@ -87,6 +90,7 @@ timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
 androidx-glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "glance" }
+androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTest" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }

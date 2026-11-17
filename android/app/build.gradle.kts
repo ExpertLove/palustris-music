@@ -34,8 +34,8 @@ android {
     applicationId = "ru.palustris.music"
     minSdk = 26
     targetSdk = 37
-    versionCode = 3
-    versionName = "0.3.0"
+    versionCode = 4
+    versionName = "0.4.0"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "API_BASE_URL", "\"https://music.palustris.ru/\"")
   }
@@ -133,6 +133,7 @@ dependencies {
   // Виджет на главный экран
   implementation(libs.androidx.glance.appwidget)
   implementation(libs.androidx.glance.material3)
+  implementation(libs.androidx.work.runtime)
 
   // Tests
   testImplementation(libs.junit)
