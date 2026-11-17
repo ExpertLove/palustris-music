@@ -90,11 +90,14 @@ rules break only in release. Glance 1.2.0 drags in WorkManager 2.7.1 (Room 2.2.5
 ru.palustris.music
 ├─ core/   AppModule (OkHttp + auth interceptor, Retrofit, Json, @AppScope), net/ (MusicApi, apiCall → Russian error text),
 │          model/ (Track, Me, Playlist…), prefs/ (SessionStore: token; SettingsStore: cache limit, quality, Wi-Fi only,
-│          normalize, crossfade, chart region, playback speed)
+│          normalize, crossfade, chart region, playback speed, wave settings, beat motion)
 ├─ data/   OfflineFiles (JSON in filesDir/offline, AtomicFile), Outbox (queue of edits for the server),
 │          AccountRepository (profile, password, devices, delete), LibraryRepository (likes, offline),
 │          PlaylistsRepository (list + content offline, edits via Outbox, share links, shared playlists),
-│          HistoryRepository (history offline copy, clear on the server → `cleared` event for home)
+│          HistoryRepository (history offline copy, clear on the server → `cleared` event for home),
+│          TasteRepository (dislikes + hidden artists, `taste.json`, via Outbox; `artistKey` = server's key),
+│          Recommendations (wave with settings / track radio / artist radio, minus what was just hidden),
+│          MixesRepository (daily mixes, forgotten likes, on repeat; `mixes.json`)
 ├─ media/  PlaybackService (MediaLibraryService + ExoPlayer: background, notification, headset keys,
 │          history via Outbox / skips, server prefetch, endless «Моя волна», skip on error,
 │          queue persistence + onPlaybackResumption, EQ in the audio sink, Android Auto catalog),
@@ -102,21 +105,26 @@ ru.palustris.music
 │          PlayerConnection (MediaController → StateFlow<PlayerState> for UI, incl. `upNext` in play order;
 │          move/remove/clear-up-next), QueueStore (filesDir/queue.json),
 │          SleepTimer, AudioStorage (one SimpleCache + DownloadManager), PinnedLruEvictor, MusicDownloadService, Streams, MediaItems
-│   audio/ LoudnessProcessor → (eq) → CrossfadeProcessor, StreamInfo, LoudnessStore (+ LoudnessMath)
+│   audio/ LoudnessProcessor → (eq) → LevelProcessor → CrossfadeProcessor, StreamInfo, LoudnessStore (+ LoudnessMath),
+│          LevelMeter (AudioLevels: 16-band spectrum snapshots keyed by track position, for the player animation)
 │   eq/    EqMath (bands/formulas = website), EqualizerProcessor (BaseAudioProcessor, PCM16), EqualizerStore (DataStore)
 ├─ widget/ MusicWidget (Glance, 3 sizes), MusicWidgetReceiver, NowPlayingStore (state + one decoded artwork),
 │          Play/Next/Previous ActionCallbacks (MediaController)
-└─ ui/     MusicRoot (theme from artwork, Nav3, mini/full player, snackbars, Navigator, add-to-playlist sheet, status bar scrim),
+└─ ui/     MusicRoot (theme from artwork, Nav3, player sheet + flying artwork + predictive back, snackbars above the player,
+           Navigator, add-to-playlist sheet, status bar scrim),
            MainViewModel (TrackActions, PlayerControls, sign out / account deleted, incoming links), home/ (new home),
            account/ (profile screen, genres, Avatar), moods/ (20 moods, cards, mood and all-moods screens), chart/ (regions),
            auth/ (two steps: form, then genres) search/ (moods grid when idle) library/ (likes, playlists, artists,
-           downloads, history + clear) settings/ player/ (FullPlayer, QueueSheet, speed sheet) catalog/
+           downloads, history + clear) settings/ (+ HiddenScreen) player/ (FullPlayer, QueueSheet, speed sheet,
+           PlayerSheet, Swipe, Visuals: LiveBackground, Spectrum, Beat) stats/ (StatsScreen, WrappedScreen, Charts)
+           home/ (+ HomeExtras: wave settings sheet, mixes, shelves, week teaser; MixScreen) catalog/
            playlists/ (drag, share, shared)
            equalizer/ common/ (Components, Collections, Groups) theme/
 ```
 
 Navigation keys: Home, Search, Library(tab), Settings, Artist(id?, name), Collection(id), Playlist(id), Equalizer,
-Account, Mood(id), Moods, Chart, Shared(slug). The nav bar is hidden on Settings, Equalizer and Account.
+Account, Mood(id), Moods, Chart, Shared(slug), Mix(id), Stats, Wrapped, Hidden. The nav bar is hidden on Settings,
+Equalizer, Account, Hidden and Wrapped; Wrapped also hides the mini player (full-screen stories).
 Detail screens use `hiltViewModel(key = ...)` in a **per-session ViewModelStore** (no per-entry ViewModel decorator,
 so tab state survives switching). The store is kept in MainViewModel keyed by the token (survives rotation) and
 cleared on sign out / another login, so a second account never sees the previous one's home or history; Hilt's
@@ -193,13 +201,15 @@ Also verified (0.5.0), debug and release (R8):
 - sign-up with 3 genres → profile shows them and «Моя волна» says «Твой жанр: Инди»; Back on step 2 keeps the form;
   the throwaway account was deleted through the app (server answers 401 for it).
 
-Unit tests (45): PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
+Unit tests (54): Taste (6: artist keys equal the server's, featured artists, pending dislikes/blocks over the server
+answer, dislike+undo cancel in the outbox, new ops JSON round trip incl. old listens, listen body), LevelMeter (3: FFT
+bin, snapshot at the player position, other track / stale snapshot), PinnedLruEvictor (6), EqualizerProcessor (4: bit-exact flat, band gain, graph equals processor, no
 wrap on overload), LRC parser, CrossfadeProcessor (10: blend shape, plan revoked → tail played out, seek and skip
 cancel, double flush at the boundary, sample-rate change, last track not cut, speed change during capture and during
 the blend), Loudness (4: gain math, per-track gain and ramp), OfflineSync (9: outbox compaction, in-flight op, JSON
 round trip, pending likes and playlist edits over the server answer, reorder, row covers), UiLogic (11: initials, mood
 interleave, moods by hour, queries, region, car item ids, queue keys, up-next ranges, speed labels, list length,
-sign-up form errors). Instrumented: LibraryBrowseTest.
+sign-up form errors). Instrumented: LibraryBrowseTest (now also the «Миксы дня» folder).
 
 ### Audio chain: loudness and crossfade (how it works)
 
@@ -255,6 +265,43 @@ each new stream (next item, seek) processors get the timeline and period uid, so
 - **Sign-up in two steps** like the site: email/name/password/consent → genres (`GenreChips`, shared with the profile,
   ≤ 8, skippable). An error about email/password/consent (`isFormError`) returns to step 1; system Back on step 2 too.
 - Not ported on purpose: admin panel, keyboard shortcuts, the full-screen visualizer.
+
+Also verified (0.6.0), debug and release (R8):
+- wave settings sheet (Незнакомое + Спокойное) → card label and preview change; mixes shelf → mix screen → play;
+- full player: live background, spectrum moves with the music, swipe artwork left → next track and colours re-tint,
+  drag the sheet down and release early → springs back; `why` under the artist («Радио «Hotel California»»);
+- track menu «Радио по треку» while it plays → «1 из 41» (the race that appended the old wave is fixed, see below);
+- «Не нравится» on the playing track → skips, snackbar «Отменить» visible above the player, server has/hasn't it;
+  «Не предлагать исполнителя» → his upcoming tracks removed; Hidden screen → «Вернуть» (server empty again);
+- stats (week tab, charts, top artist with photo, streaks), Wrapped stories (all cards, share sheet with the PNG);
+- crossfade 6 s still works with LevelProcessor in the chain (log «tail 6000ms, crossfade», next flush mix=true);
+- release: start, wave, dislike via outbox (server got it), undo, stats, Hidden; LibraryBrowseTest passes.
+
+### Recommendations and the living player (0.6.0)
+
+- **Server side does the thinking** (`server/src/recs.rs`, see `docs/ARCHITECTURE.md` and `android/docs/API.md`).
+  The app passes the wave settings (`SettingsStore.wave` → `Recommendations.wave`), sends listens with the real
+  `at`/`secs` (`PendingOp.Listened`), and dislikes/blocks through the Outbox. `TasteRepository.isHidden` filters what
+  was hidden a second ago and has not reached the server yet; the key function `artistKey` must stay identical to the
+  server's `recs::artist_key` (test `artistKeysMatchAcrossScripts` mirrors the server test).
+- **Queue sources** (`QueueSource`): `wave` and `radio` extend themselves (`PlaybackService.Reporter.extend`; radio
+  continues from the playing track, so it drifts), `mix:{id}` and `recs` are «recommended» (dislike button and `why`
+  in the full player), `user` = «Играть следующим / В очередь» (inserted after earlier `user` items; `PlayerState.source`
+  looks through them so a wave stays a wave). Two skips in a row in the wave → `rebuildWaveAhead`.
+- **Replace upcoming in ONE call** (`replaceMediaItems`). Removing items one by one let the service see «≤ 3 ahead»,
+  start `extend()` and append the old wave after the new radio (found as «1 из 67»). Same in `rebuildWaveAhead`.
+- **Player sheet** (`PlayerSheet.kt`): `progress` 0..1 drives the full player's `translationY`; both the mini player
+  (drag up) and the full player (drag down) feed `dragBy/settle`; `PredictiveBackHandler` scales it with the gesture.
+  `FlyingArtwork` interpolates between the mini and full artwork bounds (`onGloballyPositioned`, window coords); the
+  target moves with the sheet (`fullArt + (1-p)·height`). Real artworks hide while it flies.
+- **Spectrum**: `LevelProcessor` (PCM16 pass-through, Hann + FFT 1024, 16 log bands 40 Hz–16 kHz, +3 dB/octave tilt)
+  writes snapshots with the track position; `AudioLevels.read` picks the newest one not after the player position, so
+  the beat matches what is heard, not what is buffered. It only computes while the full player is visible
+  (`AudioLevels.enabled`), the setting «Анимация под музыку» is on and system animations are not disabled.
+  `Beat` smooths per frame and is read in draw/graphicsLayer only (no recomposition).
+- **Share images**: `ShareCapture` records a composable into a `GraphicsLayer`, PNG into `cacheDir/share`, FileProvider
+  `${applicationId}.files`. Images inside must load with `allowHardware(false)`.
+- Wrapped stories pause on press and whenever the activity is not RESUMED (share sheet, app in background).
 
 ### Offline: likes, playlists, profile, home (0.4.0)
 
@@ -314,6 +361,8 @@ each new stream (next item, seek) processors get the timeline and period uid, so
 - Offline creation and deletion of playlists (need temporary ids).
 - Crossfade: optional «no blend inside an album» rule; crossfade for repeat-one.
 - Baseline profile.
+- The website does not show the new server features yet (wave settings, dislike/hide, radio, mixes, stats, Wrapped).
+- Search results from YouTube Music have `duration: 0` (YTM dropped it from general search); `?kind=songs` has it.
 - Delete the test account `android-test@palustris.ru` when it is no longer needed for emulator tests.
 
 ## Product scope (parity with the website + native extras)
@@ -321,6 +370,7 @@ each new stream (next item, seek) processors get the timeline and period uid, so
 Login/registration/password reset · account settings · «Моя волна» · home with recommendations · moods · charts by
 country · search (tracks/artists/albums) · artist/album pages · likes · playlists (create/rename/drag/share/open links) ·
 history (clear) · artists in the library · genres at sign-up · synced lyrics · queue (play next, drag, remove, clear) ·
+wave settings · track/artist radio · dislike + hidden artists · daily mixes · stats · Wrapped ·
 playback speed · shuffle/repeat · **equalizer with presets** (must have) ·
 sleep timer · crossfade (0–12 s) · loudness normalization · background playback, notification, lock screen, headset
 buttons · offline cache and offline library · home-screen widget (Glance) · Android Auto.
