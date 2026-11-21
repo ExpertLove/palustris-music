@@ -1,4 +1,4 @@
-import { BarChart3, EyeOff, Gauge, Keyboard, LogOut, MailCheck, MailWarning, Shield, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react'
+import { BarChart3, EyeOff, Gauge, Keyboard, LogOut, MailCheck, MailWarning, Shield, SlidersHorizontal, Smartphone, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'wouter'
 import { Dialog } from '../components/Overlays'
@@ -126,6 +126,16 @@ export default function Account() {
               >
                 Сохранить
               </button>
+            </div>
+          </section>
+
+          <section className="acc-card">
+            <h2>Приложение</h2>
+            <p>Для Android: фон, офлайн, экран блокировки, виджет и Android Auto. Тот же аккаунт и библиотека.</p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <Link href="/app" className="btn btn-ghost">
+                <Smartphone size={18} /> Скачать приложение
+              </Link>
             </div>
           </section>
 
