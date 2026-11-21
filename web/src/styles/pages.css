@@ -138,12 +138,6 @@
 .lp-eq i { flex: 1; border-radius: 6px; background: linear-gradient(to top, var(--accent), color-mix(in oklab, var(--accent) 30%, transparent)); animation: lpeq 2.4s ease-in-out infinite; transform-origin: bottom; }
 @keyframes lpeq { 0%, 100% { transform: scaleY(var(--a)); } 50% { transform: scaleY(var(--b)); } }
 .lp-final { text-align: center; display: grid; justify-items: center; gap: 22px; }
-.lp-app-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); gap: 24px; align-items: start; margin-top: 36px; }
-.lp-app-grid h3 { font-size: clamp(22px, 2.4vw, 30px); letter-spacing: -0.03em; margin: 14px 0 12px; }
-.lp-app-grid .lp-f h3 { font-size: 20px; margin: 0 0 8px; }
-.lp-app-grid p { max-width: 56ch; }
-.lp-app-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 24px; }
-.lp-app-note { font-size: 13.5px; color: var(--ink-3); line-height: 1.6; }
 .lp-final h2 { max-width: 16ch; }
 .lp-foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 28px 0 40px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 13.5px; }
 .lp-foot a:hover { color: var(--ink); }
@@ -152,7 +146,6 @@
   .lp-demo { max-width: 420px; width: 100%; justify-self: center; }
   .lp-features { grid-template-columns: minmax(0, 1fr); }
   .lp-f.wide { grid-column: auto; }
-  .lp-app-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ───────── Документы ───────── */
@@ -161,6 +154,12 @@
 .legal p, .legal li { color: var(--ink-2); font-size: 16px; line-height: 1.7; }
 .legal ul { padding-left: 20px; display: grid; gap: 6px; margin: 12px 0 18px; }
 .legal p + p { margin-top: 14px; }
+.app-page h2 { font-size: 24px; letter-spacing: -0.03em; margin: 34px 0 10px; }
+.app-page ol { padding-left: 20px; display: grid; gap: 6px; margin: 12px 0 18px; color: var(--ink-2); font-size: 16px; line-height: 1.7; }
+.app-dl { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 26px 0 8px; padding: 20px 22px; border-radius: var(--r-xl); background: rgb(255 255 255 / .04); border: 1px solid var(--line); }
+.app-dl-ver { font-size: 19px; font-weight: 760; letter-spacing: -0.02em; }
+.app-dl-sub { margin-top: 4px; color: var(--ink-3); font-size: 13.5px; }
+.app-note { margin: 14px 0 4px; padding: 14px 16px; border-radius: 14px; background: var(--accent-soft); color: var(--ink-2); font-size: 15px; line-height: 1.65; }
 
 .page-title { font-size: clamp(30px, 3.6vw, 44px); font-weight: 800; letter-spacing: -0.04em; margin: 8px 0 22px; }
 .kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 7px; background: rgb(255 255 255 / .08); border: 1px solid var(--line-2); border-bottom-width: 2px; font-size: 12.5px; font-weight: 650; }

@@ -15,6 +15,7 @@ import Library from './pages/Library'
 import { AlbumPage, ArtistPage, LikedPage, MixPage, MoodPage, MoodsPage, PlaylistPage, SharedPage, TopPage } from './pages/Collections'
 import { Forgot, Login, Register, Reset } from './pages/Auth'
 import Legal from './pages/Legal'
+import AppPage from './pages/AppPage'
 
 const Account = lazy(() => import('./pages/Account'))
 const Admin = lazy(() => import('./pages/Admin'))
@@ -168,6 +169,7 @@ export default function App() {
         {/* Эти страницы работают в любом состоянии входа. */}
         <Route path="/privacy">{() => <Legal kind="privacy" />}</Route>
         <Route path="/terms">{() => <Legal kind="terms" />}</Route>
+        <Route path="/app" component={AppPage} />
         <Route path="/reset" component={Reset} />
         <Route>{status === 'loading' ? <Splash /> : status === 'user' ? <UserRoutes /> : <GuestRoutes />}</Route>
       </Switch>

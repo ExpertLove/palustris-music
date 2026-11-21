@@ -45,10 +45,10 @@ export function Sidebar() {
             <span>Админка</span>
           </Link>
         )}
-        <a href="/dl/muzyka.apk" className="side-link" download title="Скачать приложение для Android">
+        <Link href="/app" className="side-link" title="Приложение для Android">
           <Download size={21} />
           <span>Приложение</span>
-        </a>
+        </Link>
       </div>
       <div className="side-sep" />
       <div className="side-head">
