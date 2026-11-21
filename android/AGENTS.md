@@ -54,10 +54,17 @@ performance: debug Compose is several times slower.
 
 ## Signing
 
-`android/keystore.properties` (git-ignored) points at `C:\Users\test2\.android-keys\palustris-music-release.jks`.
-A copy of the properties also sits next to the keystore. Certificate SHA-256:
-`B1:77:ED:36:0F:45:FF:1B:82:C9:24:D4:43:A6:35:0A:DE:F6:D6:4A:8E:69:B9:DF:A6:7C:29:94:D1:E0:75:74`.
-Never regenerate the key: installed apps can only be updated with the same key.
+`android/keystore.properties` (git-ignored) points at `~/.android-keys/palustris-music-release.jks` on the Linux
+machine; the password sits next to it in `~/.android-keys/keystore.properties`. A copy of both lives on the server in
+`/root/backups/android-keys-20261121/` (600). Certificate SHA-256:
+`E2:52:F5:B0:40:0F:E3:B8:AA:85:CC:B9:08:7F:3E:4B:FF:0D:9F:14:62:7B:D1:DC:70:68:6B:DF:DE:9B:52:FB`.
+
+The key was regenerated 21.11.2026: the old one stayed on a Windows machine that became unreachable, so 0.6.2 is
+signed with a new key and installs only after uninstalling the previous app. Never regenerate it again: installed
+apps can only be updated with the same key.
+
+Local toolchain (no Android Studio): JDK 21 in `~/.local/opt/jdk-21`, SDK in `~/Android/Sdk`; build with
+`JAVA_HOME=~/.local/opt/jdk-21 ANDROID_HOME=~/Android/Sdk ./gradlew assembleRelease`.
 
 ## Backend
 
