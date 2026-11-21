@@ -1,0 +1,5 @@
+# Скопировать в /etc/systemd/system/music.service.d/yandex.conf, права 600.
+# Токен получается ./ops/yandex-token.sh и хранится ТОЛЬКО на сервере, в git его нет.
+# Без Плюса на этом аккаунте Яндекс отдаёт preview — включать как запасной источник не стоит.
+[Service]
+Environment=YANDEX_MUSIC_TOKEN=<токен из ops/yandex-token.sh>

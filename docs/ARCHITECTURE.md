@@ -24,6 +24,7 @@
 | `main.rs` | `AppState`, маршруты, сессии и пароли (argon2), профиль, лайки, история, плейлисты, `/api/stream`, обслуживание раз в 30 мин |
 | `audio.rs` | загрузка трека через yt-dlp, отдача **во время** загрузки, предзагрузка, LRU-очистка кэша, флаг «YouTube блокирует» с пробной загрузкой раз в 3 мин |
 | `sources.rs` | запасные источники звука (Audius, SoundCloud, archive.org) со строгим подбором замены, прокси с Range, `GET /api/substitute/{id}` |
+| `yandex.rs` | Яндекс Музыка: поиск и `get-file-info` по токену аккаунта, поток с расшифровкой AES-CTR и Range |
 | `accounts.rs` | аккаунты YouTube (cookies), ротация и паузы, пометка IP, журнал попыток `dl_events` |
 | `admin.rs` | `/api/admin/*`: обзор, аккаунты, журнал, логи (journalctl/docker/tail), пользователи |
 | `yt.rs` | неофициальный API YouTube Music (InnerTube `WEB_REMIX`): поиск, исполнители, альбомы, плейлисты, чарты; кэш 12 ч |

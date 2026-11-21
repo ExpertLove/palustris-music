@@ -52,6 +52,7 @@
 | `MUSIC_WEB` | `web/dist` | `/opt/music/web` | статика (на проде её отдаёт Caddy, это запасной путь) |
 | `MUSIC_ADDR` | `127.0.0.1:8030` | `127.0.0.1:8030` | адрес API |
 | `MUSIC_YTDLP` | `yt-dlp` | `/opt/yt-dlp/bin/yt-dlp` | бинарник yt-dlp |
+| `YANDEX_MUSIC_TOKEN` | пусто = источника нет | `yandex.conf` (права 600) | токен аккаунта Яндекс Музыки (`ops/yandex-token.sh`). Без Плюса отдаёт только preview |
 | `PATH` | — | `/opt/yt-dlp/bin:…` | чтобы yt-dlp видел свои зависимости |
 | `MUSIC_ADMINS` | пусто | задано на сервере (`admins.conf`) | почты админов через запятую. **Только зарегистрированные!** |
 | `MUSIC_ACCOUNT_CLIENTS` | пусто (выбор yt-dlp) | не задана | `player_client` для попыток с аккаунтом, напр. `tv_downgraded,web_safari` |

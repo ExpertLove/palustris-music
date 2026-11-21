@@ -40,6 +40,7 @@ cargo test                   # юнит-тесты (разбор cookies, кла
 ```bash
 MUSIC_DATA=./data MUSIC_WEB=../web/dist MUSIC_ADMINS=you@example.com cargo run
 # API на http://127.0.0.1:8030; сайт — npm run dev с API_UPSTREAM=http://127.0.0.1:8030
+# Яндекс как запасной источник: YANDEX_MUSIC_TOKEN=<токен из ops/yandex-token.sh> (без него источник выключен)
 ```
 
 Локальная база создаётся пустой в `server/data/` (в `.gitignore`). Боевую базу на машину разработчика не копируйте:

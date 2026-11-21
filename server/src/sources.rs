@@ -34,7 +34,7 @@ const AUDIUS_APP: &str = "palustris-music";
 const FOUND_TTL: Duration = Duration::from_secs(1800);
 const MISS_TTL: Duration = Duration::from_secs(300);
 
-fn client() -> &'static reqwest::Client {
+pub(crate) fn client() -> &'static reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
     C.get_or_init(|| {
         reqwest::Client::builder()
@@ -79,6 +79,7 @@ enum Src {
     Audius,
     SoundCloud,
     Archive,
+    Yandex,
 }
 
 impl Src {
@@ -87,6 +88,7 @@ impl Src {
             Src::Audius => "audius",
             Src::SoundCloud => "soundcloud",
             Src::Archive => "archive",
+            Src::Yandex => "yandex",
         }
     }
     fn name(self) -> &'static str {
@@ -94,15 +96,17 @@ impl Src {
             Src::Audius => "Audius",
             Src::SoundCloud => "SoundCloud",
             Src::Archive => "archive.org",
+            Src::Yandex => "Яндекс Музыка",
         }
     }
-    /// При равном совпадении: сначала то, что играет сразу (Audius и archive.org отдаются потоком),
-    /// SoundCloud приходится сначала скачать целиком.
+    /// При равном совпадении: сначала каталог с тем же мастерингом (Яндекс), потом то, что
+    /// играет сразу (Audius и archive.org отдаются потоком), SoundCloud — только скачиванием.
     fn pref(self) -> u8 {
         match self {
-            Src::Audius => 0,
-            Src::Archive => 1,
-            Src::SoundCloud => 2,
+            Src::Yandex => 0,
+            Src::Audius => 1,
+            Src::Archive => 2,
+            Src::SoundCloud => 3,
         }
     }
 }
@@ -114,6 +118,8 @@ pub enum Play {
     Url(String),
     /// Страница SoundCloud (hex): скачиваем в кэш и отдаём файлом.
     SoundCloud(String),
+    /// id трека в Яндексе: ссылка на CDN живёт минуту, поэтому берём её в момент запроса.
+    Yandex(String),
 }
 
 /// Замена, которую слышит пользователь. Уходит клиентам в `GET /api/substitute/{id}`.
@@ -503,16 +509,17 @@ async fn lookup(dir: &Path, want: &Want) -> Option<Sub> {
             .collect()
     };
     let q = format!("{first} {}", bare.trim());
-    let (a, s, ia) = tokio::join!(
+    let (a, s, ia, ya) = tokio::join!(
         limited("audius", audius(&q), 6),
         limited("soundcloud", soundcloud(&q), 12),
         limited("archive.org", archive(&first, bare.trim()), 10),
+        limited("яндекс", yandex(&q), 8),
     );
-    let total = a.len() + s.len() + ia.len();
+    let total = a.len() + s.len() + ia.len() + ya.len();
     let mut misses: HashMap<Miss, usize> = HashMap::new();
     let mut ok: Vec<(Level, i64, u8, Cand)> = Vec::new();
     let debug = std::env::var_os("MUSIC_FALLBACK_DEBUG").is_some();
-    for c in a.into_iter().chain(s).chain(ia) {
+    for c in a.into_iter().chain(s).chain(ia).chain(ya) {
         if debug {
             eprintln!("  {:<11} {:>5} c  {} — {}  → {:?}", c.src.name(), c.duration, c.artist, c.title, judge(want, &c));
         }
@@ -631,6 +638,29 @@ async fn audius(q: &str) -> Result<Vec<Cand>, String> {
 fn audius_stream(id: &str) -> String {
     format!("https://api.audius.co/v1/tracks/{id}/stream?app_name={AUDIUS_APP}")
 }
+
+// ───────────────────────── Яндекс Музыка ─────────────────────────
+
+/// Ищем тем же запросом «исполнитель название»; строгий отбор — общий `judge`.
+async fn yandex(q: &str) -> Result<Vec<Cand>, String> {
+    if !crate::yandex::enabled() {
+        return Ok(Vec::new());
+    }
+    Ok(crate::yandex::search(q)
+        .await?
+        .into_iter()
+        .map(|h| Cand {
+            src: Src::Yandex,
+            title: h.title,
+            artist: h.artist,
+            duration: h.duration,
+            page: h.page,
+            play: Play::Yandex(h.track),
+            hint: String::new(),
+        })
+        .collect())
+}
+
 
 // ───────────────────────── SoundCloud ─────────────────────────
 
@@ -869,6 +899,7 @@ async fn archive_files(id: &str) -> Result<Vec<Cand>, String> {
 async fn playable(dir: &Path, c: &Cand) -> Result<(), String> {
     match &c.play {
         Play::SoundCloud(hexid) => soundcloud_file(dir, hexid, Some(c.duration)).await.map(|_| ()),
+        Play::Yandex(track) => crate::yandex::reachable(track).await,
         Play::Url(url) => {
             let r = client().get(url).header(header::RANGE, "bytes=0-0").send().await.map_err(|e| e.to_string())?;
             let ct = r.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();

@@ -10,6 +10,7 @@
 | Пароль SMTP и прочие пароли | `/etc/systemd/system/music.service.d/*.conf` на сервере (права 600) |
 | Почты администраторов | `/etc/systemd/system/music.service.d/admins.conf` на сервере |
 | Cookies аккаунтов YouTube | `/var/lib/music/ytaccounts/` на сервере, загружаются через админку |
+| Токен Яндекс Музыки | `/etc/systemd/system/music.service.d/yandex.conf` на сервере (права 600), берётся `ops/yandex-token.sh` |
 | Ключ подписи Android, `keystore.properties` | у владельца, `~/.android-keys/` |
 | База `music.db`, её бэкапы, логи сервера | только на сервере |
 | Почты, токены и любые данные пользователей | только в базе |

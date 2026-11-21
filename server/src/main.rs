@@ -9,6 +9,7 @@ mod mail;
 mod recs;
 mod sources;
 mod stats;
+mod yandex;
 mod yt;
 
 use axum::{
@@ -877,6 +878,7 @@ async fn substitute_or(st: &Arc<AppState>, id: &str, want: Option<sources::Want>
                 None
             }
         },
+        sources::Play::Yandex(track) => Some(crate::yandex::stream(track, req.headers()).await).filter(|r| r.status().is_success()),
         sources::Play::Url(u) => Some(sources::proxy_url(u, req.headers()).await).filter(|r| r.status().is_success()),
     };
     match resp {
