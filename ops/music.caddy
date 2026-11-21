@@ -29,6 +29,13 @@ music.palustris.ru {
         file_server
     }
 
+    # Файлы приложения (APK): отдельная папка, чтобы выкладки сайта их не стирали.
+    handle_path /dl/* {
+        root * /opt/music/dl
+        header Content-Type "application/vnd.android.package-archive"
+        file_server
+    }
+
     handle /api/* {
         reverse_proxy 127.0.0.1:8030 {
             flush_interval -1

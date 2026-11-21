@@ -17,6 +17,7 @@
 | `/opt/music/bin/music` | рабочий бинарник |
 | `/opt/music/web` | статика сайта (владелец `node:node`) |
 | `/opt/music/web-next` | проверочная копия сайта → https://music.palustris.ru/next/ |
+| `/opt/music/dl` | файлы приложения → https://music.palustris.ru/dl/ (`muzyka.apk` — последняя версия) |
 | `/var/lib/music/music.db` | база SQLite (WAL) |
 | `/var/lib/music/cache/` | кэш аудио `{id}.m4a` и Opus-копии `{id}.o64.ogg` |
 | `/var/lib/music/ytaccounts/{id}.txt` | cookies аккаунтов YouTube (каталог 700, файлы 600) |
