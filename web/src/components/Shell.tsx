@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Gauge, Heart, House, Library, Plus, Search, UserRound } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Gauge, Heart, House, Library, Plus, Search, UserRound } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
 import { initials } from '../lib/format'
@@ -45,6 +45,10 @@ export function Sidebar() {
             <span>Админка</span>
           </Link>
         )}
+        <a href="/dl/muzyka.apk" className="side-link" download title="Скачать приложение для Android">
+          <Download size={21} />
+          <span>Приложение</span>
+        </a>
       </div>
       <div className="side-sep" />
       <div className="side-head">

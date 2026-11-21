@@ -1,4 +1,4 @@
-import { FileText, Heart, ListMusic, Radio, SlidersHorizontal, Smartphone } from 'lucide-react'
+import { Download, FileText, Heart, ListMusic, Radio, SlidersHorizontal, Smartphone } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'wouter'
 import { Logo } from '../components/common'
@@ -12,6 +12,9 @@ const DEMO = [
   { t: 'Зелёная волна', a: 'Подборка «Инди»', d1: '#2c9a52', d2: '#c08a1c' },
   { t: 'Неон', a: 'Подборка «Электроника»', d1: '#7b47e8', d2: '#ff5470' },
 ]
+
+/** Что лежит на /dl/muzyka.apk: менять вместе с android/app/build.gradle.kts и файлом на сервере. */
+const APP = { version: '0.6.2', size: '4,4 МБ', url: '/dl/muzyka.apk' }
 
 export default function Landing() {
   const [i, setI] = useState(0)
@@ -118,6 +121,34 @@ export default function Landing() {
                 </div>
                 <h3>Как приложение</h3>
                 <p>Установи на телефон с главного экрана и управляй музыкой с экрана блокировки и наушников.</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="lp-section">
+            <h2>Музыка и в приложении</h2>
+            <div className="lp-app-grid">
+              <div>
+                <span className="chip">Android · {APP.version}</span>
+                <h3>Фон, офлайн и экран блокировки</h3>
+                <p className="muted">
+                  Скачанные треки играют без сети, плеер управляется с наушников и экрана блокировки, есть виджет на главный экран
+                  и Android Auto. Аккаунт один: библиотека, лайки и плейлисты те же, что на сайте.
+                </p>
+                <div className="lp-app-actions">
+                  <a className="btn btn-primary btn-lg" href={APP.url} download>
+                    <Download size={20} /> Скачать APK · {APP.size}
+                  </a>
+                  <span className="lp-app-note">Android 8 и новее</span>
+                </div>
+              </div>
+              <div className="lp-f">
+                <h3>Что нового в {APP.version}</h3>
+                <p>Пересборка с новым ключом подписи — функции те же, что в 0.6.1.</p>
+                <p className="lp-app-note">
+                  Если приложение уже установлено, сначала удали старую версию: подпись изменилась, поверх она не встанет.
+                  Аккаунт и библиотека останутся на сервере.
+                </p>
               </div>
             </div>
           </section>
