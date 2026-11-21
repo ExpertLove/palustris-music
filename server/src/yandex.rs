@@ -23,9 +23,9 @@ const API: &str = "https://api.music.yandex.net/";
 const CLIENT: &str = "YandexMusicWebNext/1.0.0";
 /// Ключ подписи `get-file-info`, публичный для всех клиентов.
 const SIGN_KEY: &[u8] = b"7tvSmFbyf5hJnIHhCimDDD";
-/// Что просим: 192 kbps mp3 отдаётся без перекодирования и без FFmpeg.
-const QUALITY: &str = "nq";
-const CODECS: &str = "mp3";
+/// Что просим: `lossless` — потолок, сервер сам отдаст лучшее доступное (обычно mp3 320).
+const QUALITY: &str = "lossless";
+const CODECS: &str = "flac,mp3";
 const TRANSPORT: &str = "raw";
 const URL_TTL: Duration = Duration::from_secs(50);
 const UID_TTL: Duration = Duration::from_secs(600);
@@ -51,7 +51,6 @@ async fn request(path: &str, query: &[(&str, String)], uid: Option<&str>) -> Res
         .get(format!("{API}{path}"))
         .header(header::AUTHORIZATION, format!("OAuth {token}"))
         .header("x-yandex-music-client", CLIENT)
-        .header("x-yandex-music-without-invocation-info", "1")
         .header(header::ORIGIN, "https://music.yandex.ru")
         .header(header::REFERER, "https://music.yandex.ru/")
         .query(query);
@@ -182,13 +181,14 @@ async fn file_info(track: &str) -> Result<File, String> {
         true,
     )
     .await?;
-    let info = &v["downloadInfo"];
+    let info = if v["result"]["downloadInfo"].is_object() { &v["result"]["downloadInfo"] } else { &v["downloadInfo"] };
     let urls: Vec<String> = info["urls"]
         .as_array()
         .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect())
         .unwrap_or_default();
     if urls.is_empty() {
-        return Err(format!("нет ссылок: {}", v["message"].as_str().unwrap_or("пусто")));
+        let msg = v["message"].as_str().or_else(|| v["result"]["message"].as_str()).unwrap_or("пусто");
+        return Err(format!("нет ссылок: {msg}"));
     }
     let f = File {
         urls,
@@ -271,6 +271,7 @@ pub async fn stream(track: &str, headers: &HeaderMap) -> Response {
             }
         };
         let src = up.headers().clone();
+        let status = up.status();
         let mut resp = Response::new(Body::from_stream(up.bytes_stream().map_ok(move |chunk| {
             let mut v = chunk.to_vec();
             if let Some(d) = dec.as_mut() {
@@ -278,6 +279,7 @@ pub async fn stream(track: &str, headers: &HeaderMap) -> Response {
             }
             axum::body::Bytes::from(v)
         })));
+        *resp.status_mut() = status;
         let h = resp.headers_mut();
         for name in [header::CONTENT_TYPE, header::CONTENT_LENGTH, header::CONTENT_RANGE, header::ACCEPT_RANGES] {
             if let Some(v) = src.get(&name) {
