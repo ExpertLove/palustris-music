@@ -7,6 +7,7 @@ import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -148,13 +149,48 @@ class PlaybackService : MediaLibraryService() {
         Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
       )
-    session = MediaLibrarySession.Builder(this, player, Callback()).setSessionActivity(open).build()
+    session = MediaLibrarySession.Builder(this, SessionPlayer(player), Callback()).setSessionActivity(open).build()
     setMediaNotificationProvider(
       DefaultMediaNotificationProvider.Builder(this).build().also { it.setSmallIcon(R.drawable.ic_stat_music) }
     )
   }
 
   override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
+
+  /**
+   * Часы, машина и шторка прячут «назад/вперёд», если плеер не объявляет команды перехода:
+   * у Media3 они пропадают, когда впереди нет трека. Объявляем всегда и на конце очереди
+   * повторяем поведение плеера (ничего не делаем), а не отдаём чужой трек.
+   */
+  private class SessionPlayer(player: Player) : ForwardingPlayer(player) {
+    override fun getAvailableCommands(): Player.Commands =
+      super
+        .getAvailableCommands()
+        .buildUpon()
+        .add(Player.COMMAND_SEEK_TO_NEXT)
+        .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+        .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        .build()
+
+    override fun seekToNext() = seekToNextMediaItem()
+
+    override fun seekToNextMediaItem() {
+      if (hasNextMediaItem()) super.seekToNextMediaItem()
+    }
+
+    override fun seekToPrevious() = seekToPreviousMediaItem()
+
+    override fun seekToPreviousMediaItem() {
+      // Как кнопка «назад» в приложении: после трёх секунд — начало трека, иначе предыдущий.
+      if (currentPosition > 3_000 || currentMediaItemIndex <= 0) {
+        seekTo(0)
+        if (!isPlaying) play()
+      } else {
+        super.seekToPreviousMediaItem()
+      }
+    }
+  }
 
   private fun audioProcessors(): Array<AudioProcessor> {
     val chain =
