@@ -3,7 +3,7 @@ import { Link } from 'wouter'
 import { Logo } from '../components/common'
 
 /** Версия APK на /dl/muzyka.apk: менять вместе с android/app/build.gradle.kts и файлом на сервере. */
-const APP = { version: '0.6.4', size: '4,4 МБ', date: '24 ноября 2026', url: '/dl/muzyka.apk' }
+const APP = { version: '0.6.5', size: '4,4 МБ', date: '24 ноября 2026', url: '/dl/muzyka.apk' }
 
 export default function AppPage() {
   return (
@@ -33,7 +33,7 @@ export default function AppPage() {
 
       <h2>Что нового в {APP.version}</h2>
       <ul>
-        <li>Кнопки «назад/вперёд» больше не пропадают на часах, в машине и в шторке.</li>
+        <li>Кнопки на часах и в машине теперь работают, а не только показываются.</li>
         <li>Обложки грузятся через наш сервер: без VPN работают у операторов, которые режут Google.</li>
       </ul>
       <p className="app-note">

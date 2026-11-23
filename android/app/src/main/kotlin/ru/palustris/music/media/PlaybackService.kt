@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import androidx.annotation.OptIn
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -296,11 +297,15 @@ class PlaybackService : MediaLibraryService() {
   private inner class Callback : MediaLibrarySession.Callback {
     override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
       val trusted = controller.packageName == packageName || controller.isTrusted || controller.packageName in LIBRARY_CLIENTS
+      Log.i("MusicSession", "controller ${controller.packageName} trusted=$trusted")
       return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
         .setAvailableSessionCommands(
           if (trusted) MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
           else MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
         )
+        // Media3 по умолчанию даёт недоверенным контроллерам только чтение: на часах кнопки
+        // есть, а нажатия отклоняются. Само управление воспроизведением разрешаем всем.
+        .setAvailablePlayerCommands(Player.Commands.Builder().addAllCommands().build())
         .build()
     }
 
