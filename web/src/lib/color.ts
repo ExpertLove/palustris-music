@@ -1,4 +1,6 @@
 // Цвета из обложки: акцент + два цвета «ауры» фона.
+import { mediaUrl } from './format'
+
 export interface Palette {
   accent: string
   accentInk: string
@@ -62,8 +64,8 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-async function extract(src: string): Promise<Palette> {
-  const img = await loadImage(src)
+async function extract(src: string, video: boolean): Promise<Palette> {
+  const img = await loadImage(mediaUrl(src) ?? src)
   const S = 48
   const cv = document.createElement('canvas')
   cv.width = S
@@ -73,7 +75,7 @@ async function extract(src: string): Promise<Palette> {
   // Кадры клипов 4:3 с полосами — берём центр.
   const sw = img.naturalWidth
   const sh = img.naturalHeight
-  const side = Math.min(sw, sh) * (src.includes('i.ytimg.com') ? 0.74 : 1)
+  const side = Math.min(sw, sh) * (video ? 0.74 : 1)
   g.drawImage(img, (sw - side) / 2, (sh - side) / 2, side, side, 0, 0, S, S)
   const data = g.getImageData(0, 0, S, S).data
 
@@ -123,7 +125,7 @@ export function paletteFor(src: string | null | undefined): Promise<Palette> {
   if (!src) return Promise.resolve(DEFAULT_PALETTE)
   let p = cache.get(src)
   if (!p) {
-    p = extract(src).catch(() => DEFAULT_PALETTE)
+    p = extract(src, src.includes('i.ytimg.com')).catch(() => DEFAULT_PALETTE)
     cache.set(src, p)
     if (cache.size > 300) cache.delete(cache.keys().next().value as string)
   }

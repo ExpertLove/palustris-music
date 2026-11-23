@@ -71,13 +71,34 @@ export function shuffled<T>(a: T[]): T[] {
   return r
 }
 
+/** Обложки идут через наш сервер: у части российских операторов Google CDN без VPN недоступен. */
+export function mediaUrl(u: string | null | undefined): string | null {
+  if (!u) return null
+  try {
+    const host = new URL(u).hostname
+    if (!/(^|\.)(ytimg\.com|googleusercontent\.com|ggpht\.com)$/.test(host)) return u
+  } catch {
+    return u
+  }
+  return `/api/img?u=${encodeURIComponent(u)}`
+}
+
 /** Обложка покрупнее: у googleusercontent размер задаётся суффиксом. */
 export function bigThumb(u: string | null | undefined, px = 600): string | null {
   if (!u) return null
-  if (/googleusercontent\.com|ggpht\.com/.test(u)) return u.replace(/=w\d+-h\d+[^&]*$|=s\d+[^&]*$/, `=w${px}-h${px}-l90-rj`)
-  if (u.includes('i.ytimg.com/vi/')) return u.replace(/\/(hq|mq|sd)?default\.jpg.*$/, '/hqdefault.jpg')
-  return u
+  let out = u
+  if (/googleusercontent\.com|ggpht\.com/.test(u)) out = u.replace(/=w\d+-h\d+[^&]*$|=s\d+[^&]*$/, `=w${px}-h${px}-l90-rj`)
+  else if (u.includes('i.ytimg.com/vi/')) out = u.replace(/\/(hq|mq|sd)?default\.jpg.*$/, '/hqdefault.jpg')
+  return mediaUrl(out)
 }
 
 /** Кадр клипа 4:3 с чёрными полосами — нужно обрезать в квадрат. */
-export const isVideoThumb = (u: string | null | undefined) => !!u && u.includes('i.ytimg.com/vi/')
+export const isVideoThumb = (u: string | null | undefined) => {
+  if (!u) return false
+  if (u.includes('i.ytimg.com/vi/')) return true
+  try {
+    return decodeURIComponent(u).includes('i.ytimg.com/vi/')
+  } catch {
+    return false
+  }
+}

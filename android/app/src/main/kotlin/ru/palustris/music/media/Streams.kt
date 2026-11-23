@@ -44,10 +44,14 @@ object Streams {
   /** Обложка покрупнее: у googleusercontent размер задаётся суффиксом (как на сайте). */
   fun artwork(url: String?, px: Int = 544): String? {
     if (url == null) return null
-    if ("googleusercontent.com" in url || "ggpht.com" in url) {
-      return url.replace(Regex("=w\\d+-h\\d+[^&]*$|=s\\d+[^&]*$"), "=w$px-h$px-l90-rj")
-    }
-    if ("i.ytimg.com/vi/" in url) return url.replace(Regex("/(hq|mq|sd)?default\\.jpg.*$"), "/hqdefault.jpg")
-    return url
+    val resized =
+      when {
+        "googleusercontent.com" in url || "ggpht.com" in url ->
+          url.replace(Regex("=w\\d+-h\\d+[^&]*$|=s\\d+[^&]*$"), "=w$px-h$px-l90-rj")
+        "i.ytimg.com/vi/" in url -> url.replace(Regex("/(hq|mq|sd)?default\\.jpg.*$"), "/hqdefault.jpg")
+        else -> url
+      }
+    // Через наш сервер: у части российских операторов Google CDN без VPN недоступен.
+    return BuildConfig.API_BASE_URL.trimEnd('/') + "/api/img?u=" + Uri.encode(resized)
   }
 }

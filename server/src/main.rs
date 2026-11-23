@@ -3,6 +3,7 @@ mod admin;
 mod audio;
 mod compact;
 mod db;
+mod img;
 mod loudness;
 mod lyrics;
 mod mail;
@@ -864,6 +865,16 @@ async fn stream(State(st): St, Path(id): Path<String>, Query(q): Query<StreamQ>,
     }
 }
 
+#[derive(Deserialize)]
+struct ImgQ {
+    u: String,
+}
+
+/// Обложка через наш домен: у части российских операторов Google CDN недоступен без VPN.
+async fn image(State(st): St, Query(q): Query<ImgQ>) -> Response {
+    img::serve(&st.audio.dir, &q.u).await
+}
+
 /// YouTube не отдал звук — та же запись из другого каталога (строгие правила в sources.rs), иначе исходная ошибка.
 async fn substitute_or(st: &Arc<AppState>, id: &str, want: Option<sources::Want>, req: Request, err: Response) -> Response {
     let Some(want) = want else { return err };
@@ -1722,6 +1733,9 @@ fn spawn_maintenance(st: Arc<AppState>) {
                     eprintln!("cache gc: удалено {removed} файлов, осталось {} МБ", left / 1024 / 1024);
                 }
             }
+            let dir = st.audio.dir.clone();
+            let img_max = (std::env::var("MUSIC_IMG_CACHE_MB").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300)) * 1024 * 1024;
+            let _ = tokio::task::spawn_blocking(move || img::gc(&dir, img_max)).await;
             if let Ok(db) = st.db.lock() {
                 let now = recs::now();
                 let _ = db.execute("DELETE FROM sessions WHERE seen > 0 AND seen < ?1", [now - SESSION_TTL]);
@@ -1806,6 +1820,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/health", get(health))
+        .route("/api/img", get(image))
         .route("/api/register", post(register))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
