@@ -20,6 +20,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import ru.palustris.music.core.AppScope
 import ru.palustris.music.core.model.NewPlaylist
+import ru.palustris.music.core.model.ImportBody
+import ru.palustris.music.core.model.ImportPreview
 import ru.palustris.music.core.model.PlaylistFull
 import ru.palustris.music.core.model.PlaylistRow
 import ru.palustris.music.core.model.SharedPlaylist
@@ -108,6 +110,9 @@ constructor(
       }
       .recoverCatching { e -> full.value[id] ?: throw e }
   }
+
+  /** Что найдётся по ссылке или списку — до создания плейлиста. */
+  suspend fun previewImport(link: String?, text: String?): Result<ImportPreview> = apiCall { api.importPreview(ImportBody(link, text)) }
 
   suspend fun create(name: String, items: List<Track> = emptyList()): Result<Long> {
     val clean = items.map { it.copy(why = null) }

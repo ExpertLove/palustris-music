@@ -299,3 +299,10 @@ export interface AdminUser {
   playlists: number
   lastPlay: number
 }
+
+export interface ImportPreview {
+  name: string
+  total: number
+  matched: Track[]
+  missing: { artist: string; title: string }[]
+}

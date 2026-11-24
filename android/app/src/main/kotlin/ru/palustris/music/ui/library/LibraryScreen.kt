@@ -40,6 +40,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
@@ -104,6 +105,7 @@ fun LibraryScreen(
   val downloadsBytes by vm.downloadsBytes.collectAsStateWithLifecycle()
   var tab by rememberSaveable(initialTab) { mutableIntStateOf(initialTab.ordinal) }
   var creating by remember { mutableStateOf(false) }
+  var importing by remember { mutableStateOf(false) }
   val actions = LocalTrackActions.current
   val nav = LocalNavigator.current
 
@@ -166,8 +168,9 @@ fun LibraryScreen(
           }
           LibraryTab.Playlists -> {
             item {
-              Row(Modifier.fillMaxWidth().padding(16.dp)) {
+              Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 FilledTonalTextButton("Новый плейлист", { creating = true }, Icons.Rounded.Add)
+                FilledTonalTextButton("Импорт", { importing = true }, Icons.Rounded.FileDownload)
               }
             }
             val list = playlists
@@ -257,6 +260,17 @@ fun LibraryScreen(
     )
   }
 
+  if (importing) {
+    ImportDialog(
+      onDismiss = { importing = false },
+      preview = { link, text -> vm.importPreview(link, text) },
+      create = { name, tracks -> vm.createImported(name, tracks) },
+      onCreated = { id ->
+        importing = false
+        nav.openPlaylist(id)
+      },
+    )
+  }
   if (creating) {
     NameDialog("Новый плейлист", confirm = "Создать", onDismiss = { creating = false }) {
       creating = false

@@ -228,6 +228,105 @@ function Toasts() {
   )
 }
 
+function ImportDialog({ onClose }: { onClose: () => void }) {
+  const [link, setLink] = useState('')
+  const [text, setText] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [res, setRes] = useState<import('../lib/types').ImportPreview | null>(null)
+  const [, navigate] = useLocation()
+
+  const check = async () => {
+    if (!link.trim() && !text.trim()) return
+    setBusy(true)
+    setErr('')
+    setRes(null)
+    try {
+      const p = await api.importPreview({ link: link.trim() || undefined, text: text.trim() || undefined })
+      setRes(p)
+      setName(p.name)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Не получилось прочитать плейлист')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submit = async () => {
+    if (!res || !name.trim() || !res.matched.length) return
+    setBusy(true)
+    setErr('')
+    try {
+      const id = await useLibrary.getState().createPlaylist(name.trim(), res.matched)
+      await useLibrary.getState().load()
+      if (id) {
+        onClose()
+        toast(`Импортировано ${res.matched.length} треков`)
+        navigate(`/playlist/${id}`)
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Не получилось создать плейлист')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog title="Импорт плейлиста" onClose={onClose} width={640}>
+      <p className="muted small" style={{ marginBottom: 14 }}>
+        Ссылка на публичный плейлист (Яндекс Музыка, Spotify, Apple Music, Deezer, YouTube Music) или список строк
+        «Исполнитель — Название». Найду треки в каталоге и покажу промахи.
+      </p>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <input
+          className="input"
+          placeholder="https://music.yandex.ru/users/…/playlists/…"
+          value={link}
+          onChange={(e) => setLink(e.target.value)}
+          disabled={busy}
+        />
+        <textarea
+          className="input"
+          placeholder="Или список: Кино — Группа крови, Queen - Bohemian Rhapsody"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={5}
+          disabled={busy}
+          style={{ resize: 'vertical', fontFamily: 'inherit' }}
+        />
+        <div className="dialog-actions" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button className="btn btn-light" onClick={check} disabled={busy || (!link.trim() && !text.trim())}>
+            {busy && !res ? 'Ищу треки…' : 'Проверить'}
+          </button>
+          {res && (
+            <span className="muted small">
+              Нашлось {res.matched.length} из {res.total}
+            </span>
+          )}
+        </div>
+        {err && <p className="small" style={{ color: 'var(--danger, #ff6b6b)' }}>{err}</p>}
+        {res && (
+          <>
+            {res.missing.length > 0 && (
+              <p className="muted small">
+                Не нашлось: {res.missing.slice(0, 5).map((m) => `${m.artist} — ${m.title}`).join('; ')}
+                {res.missing.length > 5 ? ` и ещё ${res.missing.length - 5}` : ''}
+              </p>
+            )}
+            <input className="input" placeholder="Название плейлиста" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+            <div className="dialog-actions">
+              <button className="btn btn-primary" onClick={submit} disabled={busy || !name.trim() || !res.matched.length}>
+                {busy ? 'Создаю…' : `Создать плейлист (${res.matched.length})`}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Dialog>
+  )
+}
+
 function NewPlaylistDialog({ track, tracks, name: initial, onClose }: { track?: Track; tracks?: Track[]; name?: string; onClose: () => void }) {
   const create = useLibrary((s) => s.createPlaylist)
   const [name, setName] = useState(initial ?? (tracks?.length ? '' : track ? `${firstArtist(track.artist)} и не только` : ''))
@@ -458,6 +557,7 @@ export function Overlays() {
       {dialog?.kind === 'wave' && <WaveDialog onClose={close} />}
       {dialog?.kind === 'new-playlist' && <NewPlaylistDialog track={dialog.track} tracks={dialog.tracks} name={dialog.name} onClose={close} />}
       {dialog?.kind === 'add-to-playlist' && <AddToPlaylistDialog track={dialog.track} onClose={close} />}
+      {dialog?.kind === 'import-playlist' && <ImportDialog onClose={close} />}
     </>
   )
 }

@@ -14,6 +14,8 @@ import ru.palustris.music.core.model.Collection
 import ru.palustris.music.core.model.Creds
 import ru.palustris.music.core.model.HistoryItem
 import ru.palustris.music.core.model.IdBody
+import ru.palustris.music.core.model.ImportBody
+import ru.palustris.music.core.model.ImportPreview
 import ru.palustris.music.core.model.LibraryArtist
 import ru.palustris.music.core.model.Lyrics
 import ru.palustris.music.core.model.NameBody
@@ -149,6 +151,8 @@ interface MusicApi {
   @GET("api/playlists") suspend fun playlists(): List<PlaylistRow>
 
   @POST("api/playlists") suspend fun createPlaylist(@Body body: NewPlaylist): IdBody
+
+  @POST("api/import/preview") suspend fun importPreview(@Body body: ImportBody): ImportPreview
 
   @GET("api/playlists/{id}") suspend fun playlist(@Path("id") id: Long): PlaylistFull
 

@@ -1,4 +1,4 @@
-import { BarChart3, Heart, History, MicVocal, Plus, Trash2 } from 'lucide-react'
+import { BarChart3, FileDown, Heart, History, MicVocal, Plus, Trash2 } from 'lucide-react'
 import { Link, useLocation, useSearch } from 'wouter'
 import { MediaCard } from '../components/Cards'
 import { Collage, Cover, Empty, RowsSkeleton } from '../components/common'
@@ -83,6 +83,12 @@ function Playlists() {
           <Plus size={36} />
         </div>
         <span className="t">Новый плейлист</span>
+      </button>
+      <button className="card" onClick={() => openDialog({ kind: 'import-playlist' })} style={{ textAlign: 'left' }}>
+        <div className="card-art" style={{ display: 'grid', placeItems: 'center', background: 'rgb(255 255 255 / .05)', border: '1.5px dashed var(--line-2)', boxShadow: 'none' }}>
+          <FileDown size={36} />
+        </div>
+        <span className="t">Импорт плейлиста</span>
       </button>
     </div>
   )

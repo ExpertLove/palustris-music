@@ -7,6 +7,7 @@ import type {
   Collection,
   Dislikes,
   HistItem,
+  ImportPreview,
   LibraryArtist,
   Lyrics,
   Mixes,
@@ -151,6 +152,7 @@ export const api = {
   loudness: (ids: string[]) => post<Record<string, { lufs: number; peak: number }>>('/loudness', { ids }),
 
   playlists: () => get<PlaylistRow[]>('/playlists'),
+  importPreview: (b: { link?: string; text?: string }) => post<ImportPreview>('/import/preview', b),
   playlist: (id: number) => get<PlaylistFull>(`/playlists/${id}`),
   createPlaylist: (name: string, items: Track[] = []) =>
     post<{ id: number }>('/playlists', { name, items: items.map(strip) }),

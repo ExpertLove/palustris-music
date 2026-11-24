@@ -17,6 +17,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import ru.palustris.music.core.model.HistoryItem
 import ru.palustris.music.core.model.LibraryArtist
 import ru.palustris.music.core.model.PlaylistRow
+import ru.palustris.music.core.model.ImportPreview
 import ru.palustris.music.core.model.Track
 import ru.palustris.music.core.net.MusicApi
 import ru.palustris.music.core.net.apiCall
@@ -84,6 +85,10 @@ constructor(
         .onFailure { if (_artists.value == null) _artists.value = emptyList() }
     }
   }
+
+  suspend fun importPreview(link: String?, text: String?): Result<ImportPreview> = playlistsRepo.previewImport(link, text)
+
+  suspend fun createImported(name: String, tracks: List<Track>): Result<Long> = playlistsRepo.create(name, tracks)
 
   fun createPlaylist(name: String, onCreated: (Long) -> Unit) {
     viewModelScope.launch { playlistsRepo.create(name).onSuccess(onCreated).onFailure { _error.value = it.message } }

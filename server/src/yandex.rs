@@ -40,7 +40,7 @@ fn token() -> Option<String> {
     (!t.is_empty()).then(|| t.to_string())
 }
 
-async fn api(path: &str, query: &[(&str, String)], user: bool) -> Result<Value, String> {
+pub(crate) async fn api(path: &str, query: &[(&str, String)], user: bool) -> Result<Value, String> {
     let uid = if user { uid().await } else { None };
     request(path, query, uid.as_deref()).await
 }

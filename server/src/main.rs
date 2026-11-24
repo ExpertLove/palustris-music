@@ -4,6 +4,7 @@ mod audio;
 mod compact;
 mod db;
 mod img;
+mod import;
 mod loudness;
 mod lyrics;
 mod mail;
@@ -873,6 +874,25 @@ struct ImgQ {
 /// Обложка через наш домен: у части российских операторов Google CDN недоступен без VPN.
 async fn image(State(st): St, Query(q): Query<ImgQ>) -> Response {
     img::serve(&st.audio.dir, &q.u).await
+}
+
+#[derive(Deserialize)]
+struct ImportReq {
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+/// Плейлист из чужого сервиса: ссылка или список строк. Возвращает готовые треки и промахи;
+/// создаёт плейлист уже существующая ручка POST /api/playlists.
+async fn import_preview(State(st): St, h: HeaderMap, Json(b): Json<ImportReq>) -> ApiResult<import::Preview> {
+    let u = uid(&st, &h)?;
+    rate_limit(&st, &format!("import:{u}"), 3, std::time::Duration::from_secs(600))?;
+    let p = import::preview(&st.http, b.link.as_deref(), &b.text)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(p))
 }
 
 /// YouTube не отдал звук — та же запись из другого каталога (строгие правила в sources.rs), иначе исходная ошибка.
@@ -1821,6 +1841,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/img", get(image))
+        .route("/api/import/preview", post(import_preview))
         .route("/api/register", post(register))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))

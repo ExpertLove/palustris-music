@@ -147,6 +147,19 @@ data class PlaylistFull(val id: Long, val name: String, val share: String? = nul
 
 @Serializable data class NewPlaylist(val name: String, val items: List<Track> = emptyList())
 
+/** Импорт из чужого сервиса: ссылка или список строк. */
+@Serializable data class ImportBody(val link: String? = null, val text: String? = null)
+
+@Serializable data class MissingTrack(val artist: String = "", val title: String = "")
+
+@Serializable
+data class ImportPreview(
+  val name: String = "",
+  val total: Int = 0,
+  val matched: List<Track> = emptyList(),
+  val missing: List<MissingTrack> = emptyList(),
+)
+
 @Serializable data class NameBody(val name: String)
 
 @Serializable data class IdBody(val id: Long)
